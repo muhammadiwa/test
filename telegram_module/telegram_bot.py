@@ -2,6 +2,7 @@ import asyncio
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from loguru import logger
 from utils.config import Config
+from utils.config_manager import ConfigManager
 from api.mexc_api import MexcAPI
 from core.sniper_engine import SniperEngine
 from core.order_executor import OrderExecutor
@@ -37,6 +38,9 @@ class TelegramBot:
         self.sniper_engine = sniper_engine
         self.order_executor = order_executor
         self.sell_strategy_manager = sell_strategy_manager
+        
+        # Initialize config manager
+        self.config_manager = ConfigManager()
         
         # Register callback with sell strategy manager for profit notifications
         if sell_strategy_manager:
@@ -90,6 +94,7 @@ class TelegramBot:
             self.application.add_handler(CommandHandler("balance", self.cmd_balance))
             self.application.add_handler(CommandHandler("price", self.cmd_price))
             self.application.add_handler(CommandHandler("cek", self.cmd_price)) # Alias for price
+            self.application.add_handler(CommandHandler("config", self.cmd_config))
             
             # Handle unknown commands
             self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
@@ -445,11 +450,14 @@ class TelegramBot:
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
-            "🔹 */cancel <pair>* - Cancel sniping for a token\n\n"
+            "🔹 */cancel <pair>* - Cancel sniping for a token\n"
+            "🔹 */config* - View and modify bot configuration\n\n"
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
             "- `/price ETHUSDT`\n"
             "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
+            "- `/config list` - List all current configuration values\n"
+            "- `/config set PROFIT_TARGET_PERCENTAGE 5` - Set take profit to 5%\n"
         )
         
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -787,3 +795,121 @@ class TelegramBot:
         await update.message.reply_text(
             "⚠️ Unknown command. Use /help to see available commands."
         )
+        
+    async def cmd_config(self, update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /config command to view and modify bot configuration."""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.authorized_users:
+            await update.message.reply_text("⚠️ You are not authorized to use this bot.")
+            return
+        
+        # If no arguments provided, show available parameters
+        if not context.args or len(context.args) == 0:
+            params_info = self.config_manager.get_configurable_params_info()
+            message = "⚙️ *Bot Configuration*\n\n"
+            message += "Available commands:\n"
+            message += "- `/config list` - List all configurable parameters\n"
+            message += "- `/config get <param>` - Get the value of a parameter\n"
+            message += "- `/config set <param> <value>` - Set a new value for a parameter\n"
+            message += "- `/config reset <param>` - Reset a parameter to default value\n"
+            message += "- `/config resetall` - Reset all parameters to default values\n\n"
+            message += "Configurable parameters:\n"
+            
+            for param_name, param_info in params_info.items():
+                message += f"- `{param_name}` - {param_info['description']}\n"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            return
+        
+        # Parse command
+        command = context.args[0].lower()
+        
+        # List all parameters and their values
+        if command == "list":
+            params = self.config_manager.get_all_parameters()
+            params_info = self.config_manager.get_configurable_params_info()
+            
+            message = "⚙️ *Current Configuration*\n\n"
+            
+            for param_name, value in params.items():
+                param_info = params_info.get(param_name, {})
+                description = param_info.get('description', 'No description')
+                
+                message += f"*{param_name}*\n"
+                message += f"Value: `{value}`\n"
+                message += f"Description: {description}\n"
+                if 'min' in param_info and 'max' in param_info:
+                    message += f"Range: `{param_info['min']}` to `{param_info['max']}`\n"
+                message += "\n"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            return
+            
+        # Get a specific parameter value
+        elif command == "get":
+            if len(context.args) < 2:
+                await update.message.reply_text("⚠️ Usage: /config get <parameter_name>")
+                return
+                
+            param_name = context.args[1].upper()
+            value = self.config_manager.get_parameter(param_name)
+            
+            if value is not None:
+                param_info = self.config_manager.get_configurable_params_info().get(param_name, {})
+                description = param_info.get('description', 'No description')
+                
+                message = f"⚙️ *{param_name}*\n"
+                message += f"Current value: `{value}`\n"
+                message += f"Description: {description}\n"
+                
+                if 'min' in param_info and 'max' in param_info:
+                    message += f"Allowed range: `{param_info['min']}` to `{param_info['max']}`"
+                
+                await update.message.reply_text(message, parse_mode="Markdown")
+            else:
+                await update.message.reply_text(f"⚠️ Parameter '{param_name}' not found or not configurable.")
+            
+        # Set a parameter value
+        elif command == "set":
+            if len(context.args) < 3:
+                await update.message.reply_text("⚠️ Usage: /config set <parameter_name> <value>")
+                return
+                
+            param_name = context.args[1].upper()
+            value = context.args[2]
+            
+            success, message = self.config_manager.set_parameter(param_name, value)
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        # Reset a parameter to default value
+        elif command == "reset":
+            if len(context.args) < 2:
+                await update.message.reply_text("⚠️ Usage: /config reset <parameter_name>")
+                return
+                
+            param_name = context.args[1].upper()
+            success, message = self.config_manager.reset_parameter(param_name)
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        # Reset all parameters to default values
+        elif command == "resetall":
+            success, message = self.config_manager.reset_all_parameters()
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        else:
+            await update.message.reply_text(
+                "⚠️ Unknown config command. Use /config without arguments to see usage."
+            )

@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import os
+import json
 from loguru import logger
 import sys
 
@@ -25,6 +26,19 @@ if not os.path.exists("logs"):
 # Load environment variables
 load_dotenv()
 
+# Path to custom config file
+CUSTOM_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'custom_config.json')
+
+# Load custom config if exists
+custom_config = {}
+if os.path.exists(CUSTOM_CONFIG_PATH):
+    try:
+        with open(CUSTOM_CONFIG_PATH, 'r') as f:
+            custom_config = json.load(f)
+        logger.debug(f"Loaded custom configuration from {CUSTOM_CONFIG_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to load custom configuration: {e}")
+
 class Config:
     """Configuration class for the sniper bot."""
     
@@ -36,16 +50,16 @@ class Config:
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     
-    # Bot Settings
-    DEFAULT_USDT_AMOUNT = float(os.getenv("DEFAULT_USDT_AMOUNT", "100"))
-    BUY_FREQUENCY_MS = int(os.getenv("BUY_FREQUENCY_MS", "10"))
-    MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", "5"))
-    RETRY_DELAY = float(os.getenv("RETRY_DELAY", "0.5"))  # Delay in seconds between retries
-    MIN_ORDER_USDT = float(os.getenv("MIN_ORDER_USDT", "1.0"))  # Minimum order size in USDT
-    PROFIT_TARGET_PERCENTAGE = float(os.getenv("PROFIT_TARGET_PERCENTAGE", "20"))
-    STOP_LOSS_PERCENTAGE = float(os.getenv("STOP_LOSS_PERCENTAGE", "10"))
-    TRAILING_STOP_PERCENTAGE = float(os.getenv("TRAILING_STOP_PERCENTAGE", "5"))
-    TIME_BASED_SELL_MINUTES = int(os.getenv("TIME_BASED_SELL_MINUTES", "30"))
+    # Bot Settings - check custom config first, then environment variables
+    DEFAULT_USDT_AMOUNT = custom_config.get("DEFAULT_USDT_AMOUNT", float(os.getenv("DEFAULT_USDT_AMOUNT", "100")))
+    BUY_FREQUENCY_MS = custom_config.get("BUY_FREQUENCY_MS", int(os.getenv("BUY_FREQUENCY_MS", "10")))
+    MAX_RETRY_ATTEMPTS = custom_config.get("MAX_RETRY_ATTEMPTS", int(os.getenv("MAX_RETRY_ATTEMPTS", "5")))
+    RETRY_DELAY = custom_config.get("RETRY_DELAY", float(os.getenv("RETRY_DELAY", "0.5")))  # Delay in seconds between retries
+    MIN_ORDER_USDT = custom_config.get("MIN_ORDER_USDT", float(os.getenv("MIN_ORDER_USDT", "1.0")))  # Minimum order size in USDT
+    PROFIT_TARGET_PERCENTAGE = custom_config.get("PROFIT_TARGET_PERCENTAGE", float(os.getenv("PROFIT_TARGET_PERCENTAGE", "20")))
+    STOP_LOSS_PERCENTAGE = custom_config.get("STOP_LOSS_PERCENTAGE", float(os.getenv("STOP_LOSS_PERCENTAGE", "10")))
+    TRAILING_STOP_PERCENTAGE = custom_config.get("TRAILING_STOP_PERCENTAGE", float(os.getenv("TRAILING_STOP_PERCENTAGE", "5")))
+    TIME_BASED_SELL_MINUTES = custom_config.get("TIME_BASED_SELL_MINUTES", int(os.getenv("TIME_BASED_SELL_MINUTES", "30")))
     
     @classmethod
     def validate(cls):

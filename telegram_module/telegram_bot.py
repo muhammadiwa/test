@@ -440,8 +440,8 @@ class TelegramBot:
             "🔹 */help* - Show this help message\n"
             "🔹 */status* - Show bot status\n"
             "🔹 */balance* - Show wallet balance\n"
-            "🔹 */price <pair>* - Check current price of a trading pair\n"
-            "🔹 */cek <pair>* - Alias for /price command\n"
+            "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices (up to 5 pairs)\n"
+            "🔹 */cek <pair1> [pair2] [pair3]...* - Alias for /price command\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
@@ -449,7 +449,7 @@ class TelegramBot:
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
             "- `/price ETHUSDT`\n"
-            "- `/cek BTC` (automatically adds USDT suffix)"
+            "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
         )
         
         await update.message.reply_text(help_text, parse_mode="Markdown")

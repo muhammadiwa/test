@@ -1,6 +1,5 @@
 import asyncio
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram import Update
 from loguru import logger
 from utils.config import Config
 from api.mexc_api import MexcAPI
@@ -48,6 +47,8 @@ class TelegramBot:
         self.authorized_users = self.chat_id.split(',') if self.chat_id else []
         if not self.authorized_users:
             logger.warning("No authorized Telegram users configured. Nobody will be able to control the bot.")
+        else:
+            logger.info(f"Authorized Telegram users: {self.authorized_users}")
     
     async def setup(self):
         """Set up the Telegram bot and handlers."""
@@ -149,17 +150,35 @@ class TelegramBot:
             logger.debug("Starting Telegram application")
             
             # In v20+, we use run_polling but need to handle missing updater
-            await self.application.initialize()
-            await self.application.start()
-            
+            try:
+                await self.application.initialize()
+                await self.application.start()
+            except AttributeError as ae:
+                logger.error(f"Error in application initialization: {ae}")
+                logger.error("Make sure you're using python-telegram-bot v20+")
+                return
+                
             # Check if updater exists before trying to access it
             if hasattr(self.application, 'updater') and self.application.updater is not None:
                 logger.debug("Starting Telegram polling with updater")
-                await self.application.updater.start_polling()
+                try:
+                    await self.application.updater.start_polling()
+                except Exception as e:
+                    logger.error(f"Error starting polling: {e}")
             else:
                 logger.warning("Application has no updater, using alternative method")
                 # Alternative way to start polling in newer versions
-                await self.application.update_queue.put(Update(update_id=0))
+                try:
+                    # Try to use the update queue if available
+                    if hasattr(self.application, 'update_queue'):
+                        # Import locally to avoid problems at module level
+                        from telegram import Update
+                        await self.application.update_queue.put(Update(update_id=0))
+                    else:
+                        logger.warning("No update queue available in application")
+                except Exception as e:
+                    logger.error(f"Error using alternative polling method: {e}")
+                    logger.error("Bot may not receive updates")
             
             logger.debug("Telegram application started successfully")
             
@@ -200,8 +219,24 @@ class TelegramBot:
             if self.application:
                 try:
                     logger.debug("Stopping Telegram application")
+                    
+                    # First try to stop the updater properly if it exists
+                    if hasattr(self.application, 'updater') and self.application.updater is not None:
+                        try:
+                            logger.debug("Stopping updater first")
+                            await self.application.updater.stop()
+                        except Exception as updater_error:
+                            logger.warning(f"Error stopping updater: {updater_error}")
+                    
+                    # Then stop the application
                     await self.application.stop()
-                    await self.application.shutdown()
+                    
+                    # Finally shutdown
+                    try:
+                        await self.application.shutdown()
+                    except Exception as shutdown_error:
+                        logger.warning(f"Error during application shutdown: {shutdown_error}")
+                        
                 except Exception as app_error:
                     logger.error(f"Error stopping application: {app_error}")
             
@@ -234,7 +269,29 @@ class TelegramBot:
             # Send to all configured chat IDs
             for chat_id in self.authorized_users:
                 try:
-                    await self.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown")
+                    # Use a longer timeout for the message sending operation
+                    # Create a task with a timeout
+                    async def send_with_timeout():
+                        try:
+                            # First make sure bot is not None
+                            if self.bot is None:
+                                logger.error("Cannot send message - bot is None")
+                                return None
+                                
+                            # Add a longer timeout for messages in case of network issues
+                            return await asyncio.wait_for(
+                                self.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown"),
+                                timeout=10.0  # 10 second timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Telegram message send operation timed out for chat ID {chat_id}")
+                            return None
+
+                    # Execute the send operation with timeout
+                    result = await send_with_timeout()
+                    if result:
+                        logger.debug(f"Successfully sent message to chat ID {chat_id}")
+                        
                 except Exception as chat_error:
                     logger.error(f"Error sending message to chat ID {chat_id}: {chat_error}")
             
@@ -291,10 +348,14 @@ class TelegramBot:
     async def cmd_start(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command."""
         user_id = str(update.effective_user.id)
+        user_name = update.effective_user.first_name
+        
+        logger.info(f"Received /start command from user {user_name} (ID: {user_id})")
+        logger.info(f"Authorized users list: {self.authorized_users}")
         
         if user_id not in self.authorized_users:
             await update.message.reply_text("⚠️ You are not authorized to use this bot.")
-            logger.warning(f"Unauthorized access attempt from user ID: {user_id}")
+            logger.warning(f"Unauthorized access attempt from user {user_name} (ID: {user_id})")
             return
         
         await update.message.reply_text(

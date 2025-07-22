@@ -114,10 +114,25 @@ async def wait_for_signal():
         if not stop_future.done():
             stop_future.set_result(None)
     
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, signal_handler)
+    # Try to add signal handlers, but handle the case where it's not supported (Windows)
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, signal_handler)
+        logger.debug("Added signal handlers for graceful shutdown")
+    except NotImplementedError:
+        logger.warning("Signal handlers not supported on this platform")
+        # For Windows, we'll need to use a different approach
+        # Just wait indefinitely until Ctrl+C is pressed, which will raise KeyboardInterrupt
+        # caught in the main function
+        
+    # Print message to show how to stop
+    print("\nSniper Bot is running. Press Ctrl+C to stop.")
     
-    await stop_future
+    try:
+        await stop_future
+    except asyncio.CancelledError:
+        # This can happen when the main coroutine is cancelled
+        pass
 
 async def main():
     """Main function to run the bot."""
@@ -133,7 +148,9 @@ async def main():
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
     except Exception as e:
+        import traceback
         logger.error(f"Unexpected error: {e}")
+        logger.error(f"Error details: {traceback.format_exc()}")
         return 1
     finally:
         # Stop bot
@@ -142,6 +159,11 @@ async def main():
     return 0
 
 if __name__ == "__main__":
-    # Run the main function
-    exit_code = asyncio.run(main())
-    sys.exit(exit_code)
+    try:
+        # Run the main function
+        exit_code = asyncio.run(main())
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        logger.info("Application stopped with keyboard interrupt")
+        # We don't need to call stop() here because it's handled in main()'s finally block
+        sys.exit(0)

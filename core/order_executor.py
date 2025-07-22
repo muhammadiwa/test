@@ -43,10 +43,16 @@ class OrderExecutor:
             # Format quantity according to exchange requirements
             quantity = round(quantity, 6)  # Adjust based on exchange requirements
             
-            logger.info(f"Executing market buy for {symbol}: {quantity} at ~{price} USDT")
+            # Check minimum order amount (1 USDT for MEXC)
+            min_order_usdt = 1.0
+            if usdt_amount < min_order_usdt:
+                logger.warning(f"Order amount {usdt_amount} USDT is below minimum of {min_order_usdt} USDT. Adjusting to minimum.")
+                usdt_amount = min_order_usdt
             
-            # Place market buy order
-            order = await self.mexc_api.create_market_buy_order(symbol, quantity)
+            logger.info(f"Executing market buy for {symbol}: {usdt_amount} USDT at ~{price}")
+            
+            # Place market buy order (using USDT amount directly)
+            order = await self.mexc_api.create_market_buy_order(symbol, usdt_amount)
             
             if order and order.get('orderId'):
                 order_id = order['orderId']

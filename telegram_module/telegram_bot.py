@@ -38,6 +38,10 @@ class TelegramBot:
         self.order_executor = order_executor
         self.sell_strategy_manager = sell_strategy_manager
         
+        # Register callback with sell strategy manager for profit notifications
+        if sell_strategy_manager:
+            sell_strategy_manager.register_sell_callback(self.send_profit_notification)
+        
         # Initialize bot properties
         self.application = None
         self.bot = None
@@ -465,16 +469,22 @@ class TelegramBot:
         order = await self.order_executor.execute_market_buy(pair, amount)
         
         if order and order.get('orderId'):
-            price = float(order.get('price', 0))
-            quantity = float(order.get('executedQty', 0))
+            order_id = order.get('orderId')
             
-            # Add sell strategy for the bought token
-            self.sell_strategy_manager.add_strategy(pair, price, quantity)
+            # Send initial notification
+            await update.message.reply_text("✅ Buy order placed successfully. Waiting for execution details...")
             
-            await update.message.reply_text(f"✅ Successfully bought {quantity} {pair} at {price} USDT.")
+            # Register callback for when we get accurate execution details
+            async def order_callback(symbol, executed_qty, avg_price, total_value):
+                logger.info(f"Received order callback for {symbol}: {executed_qty} @ {avg_price}, total: {total_value}")
+                await update.message.reply_text(
+                    f"✅ Successfully bought {executed_qty} {symbol} at {avg_price:.8f} USDT, total: {total_value:.2f} USDT."
+                )
+                # Send detailed trade notification with accurate price
+                await self.send_trade_notification("BUY", symbol, executed_qty, avg_price)
             
-            # Send trade notification
-            await self.send_trade_notification("BUY", pair, quantity, price)
+            # Register our callback to be called when order is filled with accurate price info
+            await self.order_executor.register_order_callback(order_id, order_callback)
         else:
             await update.message.reply_text(f"❌ Failed to buy {pair}. Check logs for details.")
     
@@ -503,12 +513,22 @@ class TelegramBot:
         order = await self.order_executor.execute_market_sell(pair, amount)
         
         if order and order.get('orderId'):
-            price = float(order.get('price', 0))
-            quantity = float(order.get('executedQty', 0))
-            await update.message.reply_text(f"✅ Successfully sold {quantity} {pair} at {price} USDT.")
+            order_id = order.get('orderId')
             
-            # Send trade notification
-            await self.send_trade_notification("SELL", pair, quantity, price)
+            # Send initial notification
+            await update.message.reply_text("✅ Sell order placed successfully. Waiting for execution details...")
+            
+            # Register callback for when we get accurate execution details
+            async def order_callback(symbol, executed_qty, avg_price, total_value):
+                logger.info(f"Received order callback for {symbol}: {executed_qty} @ {avg_price}, total: {total_value}")
+                await update.message.reply_text(
+                    f"✅ Successfully sold {executed_qty} {symbol} at {avg_price:.8f} USDT, total: {total_value:.2f} USDT."
+                )
+                # Send detailed trade notification with accurate price
+                await self.send_trade_notification("SELL", symbol, executed_qty, avg_price)
+            
+            # Register our callback to be called when order is filled with accurate price info
+            await self.order_executor.register_order_callback(order_id, order_callback)
         else:
             await update.message.reply_text(f"❌ Failed to sell {pair}. Check logs for details.")
     

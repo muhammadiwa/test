@@ -48,19 +48,25 @@ async def setup():
     sniper_engine = SniperEngine(mexc_api)
     sell_strategy_manager = SellStrategyManager(mexc_api, order_executor)
     
+    # Connect components (bidirectional references)
+    order_executor.sell_strategy_manager = sell_strategy_manager
+    
     # Initialize Dashboard
     dashboard_manager = DashboardManager(
         mexc_api, sniper_engine, order_executor, sell_strategy_manager
     )
     logger.info("Dashboard initialized")
     
-    # Initialize Telegram bot
+    # Initialize Telegram bot (after all other components)
     if Config.TELEGRAM_BOT_TOKEN and Config.TELEGRAM_CHAT_ID:
         logger.info("Setting up Telegram bot...")
+        # Pass all required components to TelegramBot
         telegram_bot = TelegramBot(mexc_api, sniper_engine, order_executor, sell_strategy_manager)
         
         if not await telegram_bot.setup():
             logger.warning("Could not set up Telegram bot. Continuing without notifications.")
+        else:
+            logger.success("Telegram bot set up successfully")
     else:
         logger.warning("Telegram notifications are disabled. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env file to enable.")
     

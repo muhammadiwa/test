@@ -18,6 +18,8 @@ class OrderExecutor:
         self.mexc_api = mexc_api
         self.active_orders = {}  # Track active orders by order ID
         self.monitor_tasks = {}  # Track monitoring tasks by order ID
+        self.sell_strategy_manager = None  # Will be set after initialization
+        self.order_callbacks = {}  # Callbacks to be executed after order is filled
     
     async def execute_market_buy(self, symbol, usdt_amount):
         """
@@ -224,7 +226,27 @@ class OrderExecutor:
                             self.active_orders[order_id]['filled'] = True
                             self.active_orders[order_id]['quantity'] = executed_qty
                             
+                            # If this is a buy order, add sell strategy with ACCURATE execution price
+                            if self.active_orders[order_id]['side'] == 'BUY' and self.sell_strategy_manager:
+                                # Only create strategy if it's a buy order and we have a strategy manager
+                                try:
+                                    # Use the ACTUAL executed average price for setting up sell strategy
+                                    self.sell_strategy_manager.add_strategy(symbol, avg_price, executed_qty)
+                                    logger.info(f"Added sell strategy for {symbol} based on execution price {avg_price:.8f}")
+                                except Exception as e:
+                                    logger.error(f"Error adding sell strategy for {symbol}: {e}")
+                            
                         logger.info(f"Order {order_id} executed: {executed_qty} {symbol.replace('USDT', '')} at avg price: {avg_price:.8f} USDT, total: {quote_qty:.2f} USDT")
+                        
+                        # Execute any registered callbacks with the ACTUAL execution price and quantity
+                        if order_id in self.order_callbacks:
+                            for callback in self.order_callbacks[order_id]:
+                                try:
+                                    await callback(symbol, executed_qty, avg_price, quote_qty)
+                                except Exception as e:
+                                    logger.error(f"Error executing callback for order {order_id}: {e}")
+                            # Clear callbacks after execution
+                            del self.order_callbacks[order_id]
                     else:
                         # Fall back to order status response if detailed info not available
                         if order_id in self.active_orders:
@@ -236,6 +258,16 @@ class OrderExecutor:
                         if executed_qty > 0:
                             avg_price = cummulative_quote_qty / executed_qty
                             logger.info(f"Order {order_id} executed at avg price: {avg_price} USDT")
+                            
+                            # Execute callbacks even if we had to fall back to basic order info
+                            if order_id in self.order_callbacks:
+                                for callback in self.order_callbacks[order_id]:
+                                    try:
+                                        await callback(symbol, executed_qty, avg_price, cummulative_quote_qty)
+                                    except Exception as e:
+                                        logger.error(f"Error executing callback for order {order_id}: {e}")
+                                # Clear callbacks after execution
+                                del self.order_callbacks[order_id]
                     
                     return True
                     
@@ -285,3 +317,17 @@ class OrderExecutor:
                 await asyncio.sleep(1)
         
         return False
+        
+    async def register_order_callback(self, order_id, callback):
+        """
+        Register a callback to be executed when an order is filled.
+        
+        Args:
+            order_id: The order ID
+            callback: Async function to call with (symbol, quantity, price, total) when order is filled
+        """
+        if order_id not in self.order_callbacks:
+            self.order_callbacks[order_id] = []
+        
+        self.order_callbacks[order_id].append(callback)
+        logger.debug(f"Registered callback for order {order_id}")

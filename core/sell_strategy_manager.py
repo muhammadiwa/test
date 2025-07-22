@@ -23,6 +23,7 @@ class SellStrategyManager:
         self.order_executor = order_executor
         self.active_strategies = {}  # Track active selling strategies
         self.monitoring_tasks = {}  # Track price monitoring tasks
+        self.sell_callbacks = []  # Callbacks for when a sell is executed
     
     def add_strategy(self, symbol, buy_price, quantity, strategy_config=None):
         """
@@ -75,6 +76,16 @@ class SellStrategyManager:
         
         return strategy_id
     
+    def register_sell_callback(self, callback):
+        """
+        Register a callback to be called when a sell order is executed.
+        
+        Args:
+            callback: Async function to call with (symbol, buy_price, sell_price, quantity, reason)
+        """
+        self.sell_callbacks.append(callback)
+        logger.debug(f"Registered sell callback, total callbacks: {len(self.sell_callbacks)}")
+        
     def remove_strategy(self, strategy_id):
         """
         Remove a sell strategy.
@@ -281,12 +292,27 @@ class SellStrategyManager:
                     profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
                     
                     logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {sell_price:.8f} USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                    
+                    # Execute registered callbacks
+                    for callback in self.sell_callbacks:
+                        try:
+                            await callback(symbol, buy_price, sell_price, executed_qty, reason)
+                        except Exception as e:
+                            logger.error(f"Error executing sell callback: {e}")
                 else:
                     # Fall back to basic information if detailed info not available
                     sell_price = float(sell_order.get('price', 0))
+                    executed_qty = float(sell_order.get('executedQty', strategy['quantity']))
                     profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
                     
                     logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                    
+                    # Execute registered callbacks with basic info
+                    for callback in self.sell_callbacks:
+                        try:
+                            await callback(symbol, buy_price, sell_price, executed_qty, reason)
+                        except Exception as e:
+                            logger.error(f"Error executing sell callback: {e}")
                 
                 self.active_strategies[strategy_id] = strategy
                 return True

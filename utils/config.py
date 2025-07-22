@@ -40,6 +40,8 @@ class Config:
     DEFAULT_USDT_AMOUNT = float(os.getenv("DEFAULT_USDT_AMOUNT", "100"))
     BUY_FREQUENCY_MS = int(os.getenv("BUY_FREQUENCY_MS", "10"))
     MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", "5"))
+    RETRY_DELAY = float(os.getenv("RETRY_DELAY", "0.5"))  # Delay in seconds between retries
+    MIN_ORDER_USDT = float(os.getenv("MIN_ORDER_USDT", "1.0"))  # Minimum order size in USDT
     PROFIT_TARGET_PERCENTAGE = float(os.getenv("PROFIT_TARGET_PERCENTAGE", "20"))
     STOP_LOSS_PERCENTAGE = float(os.getenv("STOP_LOSS_PERCENTAGE", "10"))
     TRAILING_STOP_PERCENTAGE = float(os.getenv("TRAILING_STOP_PERCENTAGE", "5"))

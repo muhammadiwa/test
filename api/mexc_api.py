@@ -225,11 +225,11 @@ class MexcAPI:
     
     async def create_market_buy_order(self, symbol, quantity):
         """Create a market buy order."""
-        # For MEXC API, market buy orders typically use quoteOrderQty (USDT amount)
-        # rather than quantity (asset amount) for market buys
+        # Import utility for handling order book calculations
+        from api.order_book_utils import calculate_buy_from_orderbook
         
-        # MEXC requires minimum transaction amount of 1 USDT
-        min_transaction = 1.0
+        # MEXC requires minimum transaction amount (from Config)
+        min_transaction = Config.MIN_ORDER_USDT
         
         # Convert to float and ensure minimum amount
         quantity = float(quantity)
@@ -240,24 +240,67 @@ class MexcAPI:
         # Format the amount with proper precision to avoid floating point issues
         quantity = round(quantity, 4)
         
-        params = {
-            'symbol': symbol,
-            'side': 'BUY',
-            'type': 'MARKET',
-            'quoteOrderQty': quantity,  # This is USDT amount for market buy
-        }
-        logger.info(f"Creating market buy order: {symbol}, amount: {quantity} USDT")
-        
         # Make sure symbol is in uppercase
-        params['symbol'] = params['symbol'].upper()
+        symbol = symbol.upper()
         
-        try:
-            result = await self._http_request('POST', self.ORDER_ENDPOINT, params, signed=True)
-            logger.info(f"Market buy order created: {result}")
-            return result
-        except Exception as e:
-            logger.error(f"Failed to create market buy order: {str(e)}")
-            raise
+        # Handle new listings or tokens that might not have prices yet
+        # Get retry settings from Config
+        retry_max = Config.MAX_RETRY_ATTEMPTS
+        retry_count = 0
+        
+        while retry_count < retry_max:
+            try:
+                logger.info(f"Creating market buy order for {symbol}, amount: {quantity} USDT")
+                
+                # Try to check if we need order book analysis first (for new tokens)
+                need_orderbook = False
+                try:
+                    ticker = await self.get_ticker_price(symbol)
+                    if not ticker:
+                        logger.warning(f"No ticker available for {symbol}, will use order book analysis")
+                        need_orderbook = True
+                except Exception as e:
+                    logger.warning(f"Error getting ticker price for {symbol}: {e}")
+                    need_orderbook = True
+                    
+                # For new tokens, try to analyze the order book first
+                if need_orderbook:
+                    logger.info(f"Analyzing order book for {symbol} to execute buy order")
+                    
+                    # Get order book and calculate optimal execution
+                    buy_qty, _ = await calculate_buy_from_orderbook(self, symbol, quantity)
+                    
+                    if buy_qty:
+                        logger.info(f"Calculated buy quantity from order book: {buy_qty}")
+                    else:
+                        logger.warning("Could not calculate from order book, using standard market order")
+                
+                # Standard market order params
+                params = {
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'type': 'MARKET',
+                    'quoteOrderQty': quantity,  # This is USDT amount for market buy
+                }
+                
+                # Try to place the order
+                result = await self._http_request('POST', self.ORDER_ENDPOINT, params, signed=True)
+                logger.info(f"Market buy order created: {result}")
+                return result
+                
+            except Exception as e:
+                logger.warning(f"Failed to create market buy order: {str(e)}")
+                
+                # If we've reached max retries, raise the exception
+                if retry_count >= retry_max - 1:
+                    logger.error(f"Max retries ({retry_max}) reached for market buy order on {symbol}")
+                    raise
+                
+                # Otherwise, retry after a delay
+                retry_count += 1
+                retry_delay = Config.RETRY_DELAY
+                logger.info(f"Retrying market buy order for {symbol} (attempt {retry_count}/{retry_max}) in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
     
     async def create_market_sell_order(self, symbol, quantity):
         """Create a market sell order."""

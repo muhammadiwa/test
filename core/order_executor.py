@@ -31,38 +31,62 @@ class OrderExecutor:
             Dict containing order details or None if failed
         """
         try:
-            # Get current price to calculate quantity
-            ticker = await self.mexc_api.get_ticker_price(symbol)
-            if not ticker:
-                logger.error(f"Could not get price for {symbol}")
-                return None
-            
-            price = float(ticker[0]['price'] if isinstance(ticker, list) else ticker['price'])
-            quantity = usdt_amount / price
-            
-            # Format quantity according to exchange requirements
-            quantity = round(quantity, 6)  # Adjust based on exchange requirements
-            
-            # Check minimum order amount (1 USDT for MEXC)
-            min_order_usdt = 1.0
+            # Check minimum order amount from Config
+            min_order_usdt = Config.MIN_ORDER_USDT
             if usdt_amount < min_order_usdt:
                 logger.warning(f"Order amount {usdt_amount} USDT is below minimum of {min_order_usdt} USDT. Adjusting to minimum.")
                 usdt_amount = min_order_usdt
             
-            logger.info(f"Executing market buy for {symbol}: {usdt_amount} USDT at ~{price}")
+            # Initialize variables for order processing
+
+            # Get max retries and retry delay from config
+            max_retries = Config.MAX_RETRY_ATTEMPTS
+            retry_count = 0            # Initialize order variable
+            order = None
             
-            # Place market buy order (using USDT amount directly)
-            order = await self.mexc_api.create_market_buy_order(symbol, usdt_amount)
+            while retry_count <= max_retries:
+                try:
+                    logger.info(f"Executing market buy for {symbol}: {usdt_amount} USDT (attempt {retry_count+1}/{max_retries+1})")
+                    
+                    # Place market buy order (using USDT amount directly)
+                    # Our improved create_market_buy_order will handle new tokens
+                    order = await self.mexc_api.create_market_buy_order(symbol, usdt_amount)
+                    
+                    # If successful, break the retry loop
+                    break
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.warning(f"Error on market buy attempt {retry_count+1}: {error_msg}")
+                    
+                    # Check if error is related to token not being available yet
+                    if "Invalid symbol" in error_msg or "float division by zero" in error_msg:
+                        if retry_count < max_retries:
+                            retry_count += 1
+                            retry_delay = Config.RETRY_DELAY
+                            logger.info(f"Token may be new or not fully listed. Retrying in {retry_delay} seconds... ({retry_count}/{max_retries})")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"Max retries reached for {symbol}. Token may not be available for trading.")
+                            return None
+                    else:
+                        # For other errors, just raise
+                        logger.error(f"Error executing market buy: {error_msg}")
+                        raise
             
             if order and order.get('orderId'):
                 order_id = order['orderId']
                 logger.success(f"Market buy order placed: {order_id}")
                 
+                # Get executed quantity from the order response if available
+                executed_qty = float(order.get('executedQty', 0))
+                
                 # Track this order
                 self.active_orders[order_id] = {
                     'symbol': symbol,
                     'side': 'BUY',
-                    'quantity': quantity,
+                    'quantity': executed_qty,  # Use executed quantity from response
                     'usdt_amount': usdt_amount,
                     'status': 'NEW',
                     'filled': False

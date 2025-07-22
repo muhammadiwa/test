@@ -245,34 +245,55 @@ class SellStrategyManager:
         
         strategy = self.active_strategies[strategy_id]
         symbol = strategy['symbol']
-        quantity = strategy['quantity']
         buy_price = strategy['buy_price']
         
+        # We don't pass the quantity explicitly, as the mexc_api will fetch the current balance
         logger.info(f"Executing sell for {symbol} ({strategy_id}) - Reason: {reason}")
         
         try:
-            # Execute market sell order
-            sell_order = await self.order_executor.execute_market_sell(symbol, quantity)
+            # Execute market sell order - pass None for quantity to use all available balance
+            sell_order = await self.order_executor.execute_market_sell(symbol, None)
             
             if sell_order and sell_order.get('orderId'):
+                order_id = sell_order['orderId']
+                
+                # Get detailed sell order information
+                order_details = await self.mexc_api.get_filled_order_details(symbol, order_id)
+                
                 # Mark strategy as executed
                 strategy['status'] = 'EXECUTED'
                 strategy['executed'] = True
                 strategy['sell_reason'] = reason
                 strategy['sell_time'] = datetime.now()
+                
+                # Update with actual execution details if available
+                if order_details:
+                    sell_price = order_details['price']
+                    executed_qty = order_details['quantity']
+                    quote_qty = order_details['value']
+                    
+                    # Update strategy with actual sell details
+                    strategy['sell_price'] = sell_price
+                    strategy['sell_quantity'] = executed_qty
+                    strategy['sell_value'] = quote_qty
+                    
+                    # Calculate profit/loss
+                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+                    
+                    logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {sell_price:.8f} USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                else:
+                    # Fall back to basic information if detailed info not available
+                    sell_price = float(sell_order.get('price', 0))
+                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+                    
+                    logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                
                 self.active_strategies[strategy_id] = strategy
-                
-                # Get execution details for profit calculation
-                sell_price = float(sell_order.get('price', 0))
-                profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
-                
-                logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
-                
                 return True
             else:
                 logger.error(f"Failed to execute sell for {symbol}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error executing sell for {symbol}: {e}")
+            logger.error(f"Failed to execute sell for {symbol}: {e}")
             return False

@@ -98,8 +98,10 @@ class MexcAPI:
             headers['X-MEXC-APIKEY'] = self.api_key
             
             # Add timestamp and recvWindow to parameters
+            # Use a fresh timestamp for each request to avoid timing issues
             params['timestamp'] = int(time.time() * 1000)
-            params['recvWindow'] = 5000  # Optional, helps prevent replay attacks
+            # Increase recvWindow to avoid timestamp errors (especially during high network latency)
+            params['recvWindow'] = 60000  # 60 seconds window to process the request
             
             # Convert parameters to string for signing
             params_str = '&'.join([f'{k}={v}' for k, v in sorted(params.items())])
@@ -179,6 +181,44 @@ class MexcAPI:
             return result
         except Exception as e:
             logger.error(f"Failed to get account info: {str(e)}")
+            return None
+            
+    async def get_asset_balance(self, asset):
+        """
+        Get the balance of a specific asset.
+        
+        Args:
+            asset: Asset symbol (e.g., BTC, ETH, USDT)
+            
+        Returns:
+            dict: {'free': free_amount, 'locked': locked_amount, 'total': total_amount}
+            or None if failed
+        """
+        logger.debug(f"Getting balance for {asset}")
+        try:
+            account_info = await self.get_account_info()
+            
+            if not account_info or 'balances' not in account_info:
+                logger.error("Could not retrieve account information")
+                return None
+            
+            for balance in account_info['balances']:
+                if balance['asset'] == asset:
+                    free = float(balance['free'])
+                    locked = float(balance['locked'])
+                    total = free + locked
+                    return {
+                        'free': free,
+                        'locked': locked,
+                        'total': total
+                    }
+            
+            # If we get here, the asset wasn't found
+            logger.warning(f"Asset {asset} not found in account balances")
+            return {'free': 0.0, 'locked': 0.0, 'total': 0.0}
+            
+        except Exception as e:
+            logger.error(f"Error getting {asset} balance: {str(e)}")
             return None
     
     async def get_exchange_info(self):
@@ -286,6 +326,20 @@ class MexcAPI:
                 # Try to place the order
                 result = await self._http_request('POST', self.ORDER_ENDPOINT, params, signed=True)
                 logger.info(f"Market buy order created: {result}")
+                
+                # For market orders, the quantity may not be immediately available in the response
+                # Wait a moment and then fetch the actual order details if needed
+                if not result.get('executedQty') or float(result.get('executedQty', 0)) <= 0:
+                    logger.info("Order created but no quantity information yet. Will fetch details.")
+                    await asyncio.sleep(0.5)  # Give the order a moment to process
+                    
+                    # Get updated order details
+                    order_details = await self.get_order_status(symbol, result['orderId'])
+                    if order_details and 'executedQty' in order_details:
+                        # Update the original result with the fresh data
+                        result['executedQty'] = order_details['executedQty']
+                        logger.info(f"Updated order quantity from status: {result['executedQty']}")
+                
                 return result
                 
             except Exception as e:
@@ -302,8 +356,32 @@ class MexcAPI:
                 logger.info(f"Retrying market buy order for {symbol} (attempt {retry_count}/{retry_max}) in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
     
-    async def create_market_sell_order(self, symbol, quantity):
-        """Create a market sell order."""
+    async def create_market_sell_order(self, symbol, quantity=None):
+        """
+        Create a market sell order.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            quantity: Amount of the base asset to sell (optional, if None, will sell all available)
+            
+        Returns:
+            Dict containing order details or None if failed
+        """
+        # Extract base asset from symbol (e.g., BTC from BTCUSDT)
+        base_asset = symbol.upper().replace("USDT", "")
+        
+        # If quantity is not provided or is zero, get the current balance
+        if not quantity or float(quantity) <= 0:
+            logger.info(f"No quantity provided or quantity is zero. Fetching available balance for {base_asset}")
+            balance = await self.get_asset_balance(base_asset)
+            
+            if not balance or balance['free'] <= 0:
+                logger.error(f"No available balance for {base_asset}")
+                return None
+                
+            quantity = balance['free']
+            logger.info(f"Using available balance: {quantity} {base_asset}")
+        
         params = {
             'symbol': symbol.upper(),
             'side': 'SELL',
@@ -315,13 +393,36 @@ class MexcAPI:
         try:
             result = await self._http_request('POST', self.ORDER_ENDPOINT, params, signed=True)
             logger.info(f"Market sell order created: {result}")
+            
+            # For market orders, the quantity may not be immediately available in the response
+            # Wait a moment and then fetch the actual order details if needed
+            if not result.get('executedQty') or float(result.get('executedQty', 0)) <= 0:
+                logger.info("Order created but no quantity information yet. Will fetch details.")
+                await asyncio.sleep(0.5)  # Give the order a moment to process
+                
+                # Get updated order details
+                order_details = await self.get_order_status(symbol, result['orderId'])
+                if order_details and 'executedQty' in order_details:
+                    # Update the original result with the fresh data
+                    result['executedQty'] = order_details['executedQty']
+                    logger.info(f"Updated order quantity from status: {result['executedQty']}")
+            
             return result
         except Exception as e:
             logger.error(f"Failed to create market sell order: {str(e)}")
             raise
     
     async def get_order_status(self, symbol, order_id):
-        """Check the status of an order."""
+        """
+        Check the status of an order.
+        
+        Args:
+            symbol: Trading pair symbol
+            order_id: Order ID to check
+            
+        Returns:
+            Dict containing order details or None if failed
+        """
         params = {
             'symbol': symbol.upper(),
             'orderId': order_id
@@ -332,6 +433,49 @@ class MexcAPI:
             return result
         except Exception as e:
             logger.error(f"Failed to get order status for order {order_id}: {str(e)}")
+            return None
+    
+    async def get_filled_order_details(self, symbol, order_id):
+        """
+        Get detailed information about a filled order, including filled quantity.
+        This is useful when the initial order response doesn't include complete execution details.
+        
+        Args:
+            symbol: Trading pair symbol
+            order_id: Order ID to check
+            
+        Returns:
+            Dict with 'quantity', 'price', 'value', or None if failed
+        """
+        order_status = await self.get_order_status(symbol, order_id)
+        
+        if not order_status:
+            logger.error(f"Could not get details for order {order_id}")
+            return None
+        
+        # Check if order is filled
+        if order_status.get('status') != 'FILLED':
+            logger.warning(f"Order {order_id} is not yet filled, status: {order_status.get('status')}")
+        
+        try:
+            # Get quantity and price info
+            executed_qty = float(order_status.get('executedQty', 0))
+            quote_qty = float(order_status.get('cummulativeQuoteQty', 0))
+            
+            # Calculate average price
+            avg_price = 0
+            if executed_qty > 0:
+                avg_price = quote_qty / executed_qty
+            
+            return {
+                'quantity': executed_qty,
+                'price': avg_price,
+                'value': quote_qty,
+                'side': order_status.get('side', '')
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating order details for {order_id}: {str(e)}")
             return None
     
     async def cancel_order(self, symbol, order_id):

@@ -79,8 +79,22 @@ class OrderExecutor:
                 order_id = order['orderId']
                 logger.success(f"Market buy order placed: {order_id}")
                 
-                # Get executed quantity from the order response if available
-                executed_qty = float(order.get('executedQty', 0))
+                # Check for executed quantity in the response
+                executed_qty = 0.0
+                
+                # Try to get the quantity from different fields in the response
+                if 'executedQty' in order and order['executedQty']:
+                    executed_qty = float(order['executedQty'])
+                elif 'origQty' in order and order['origQty']:
+                    # For market orders with quoteOrderQty, origQty might be calculated
+                    executed_qty = float(order['origQty'])
+                
+                # If quantity is still 0, we need to fetch it from the order status
+                if executed_qty <= 0:
+                    logger.warning("Could not determine quantity from order response, fetching order status")
+                    order_status = await self.mexc_api.get_order_status(symbol, order_id)
+                    if order_status and 'executedQty' in order_status:
+                        executed_qty = float(order_status['executedQty'])
                 
                 # Track this order
                 self.active_orders[order_id] = {
@@ -104,32 +118,52 @@ class OrderExecutor:
             logger.error(f"Error executing market buy for {symbol}: {e}")
             return None
     
-    async def execute_market_sell(self, symbol, quantity):
+    async def execute_market_sell(self, symbol, quantity=None):
         """
         Execute a market sell order for the specified symbol.
         
         Args:
             symbol: Trading pair symbol (e.g., "BTCUSDT")
-            quantity: Amount of the base asset to sell
+            quantity: Amount of the base asset to sell (optional, if None, will sell all available)
             
         Returns:
             Dict containing order details or None if failed
         """
         try:
-            logger.info(f"Executing market sell for {symbol}: {quantity}")
+            logger.info(f"Executing market sell for {symbol}: {quantity if quantity else 'all available'}")
             
-            # Place market sell order
+            # Place market sell order - if quantity is None, the API will use all available balance
             order = await self.mexc_api.create_market_sell_order(symbol, quantity)
             
             if order and order.get('orderId'):
                 order_id = order['orderId']
                 logger.success(f"Market sell order placed: {order_id}")
                 
+                # Initialize executed_qty
+                executed_qty = 0.0
+                
+                # Try to get the quantity from different fields in the response
+                if 'executedQty' in order and order['executedQty']:
+                    executed_qty = float(order['executedQty'])
+                elif 'origQty' in order and order['origQty']:
+                    executed_qty = float(order['origQty'])
+                
+                # If quantity is still 0, and we had a quantity parameter, use that
+                if executed_qty <= 0 and quantity:
+                    executed_qty = float(quantity)
+                
+                # If we still don't have a quantity, fetch from order status
+                if executed_qty <= 0:
+                    logger.warning("Could not determine quantity from sell order response, fetching order status")
+                    order_status = await self.mexc_api.get_order_status(symbol, order_id)
+                    if order_status and 'executedQty' in order_status:
+                        executed_qty = float(order_status['executedQty'])
+                
                 # Track this order
                 self.active_orders[order_id] = {
                     'symbol': symbol,
                     'side': 'SELL',
-                    'quantity': quantity,
+                    'quantity': executed_qty,
                     'status': 'NEW',
                     'filled': False
                 }
@@ -177,16 +211,31 @@ class OrderExecutor:
                 if status == 'FILLED':
                     logger.success(f"Order {order_id} for {symbol} has been filled!")
                     
-                    if order_id in self.active_orders:
-                        self.active_orders[order_id]['filled'] = True
+                    # Get detailed order information
+                    order_details = await self.mexc_api.get_filled_order_details(symbol, order_id)
                     
-                    # Calculate and log execution details
-                    executed_qty = float(order_status.get('executedQty', 0))
-                    cummulative_quote_qty = float(order_status.get('cummulativeQuoteQty', 0))
-                    
-                    if executed_qty > 0:
-                        avg_price = cummulative_quote_qty / executed_qty
-                        logger.info(f"Order {order_id} executed at avg price: {avg_price} USDT")
+                    if order_details:
+                        executed_qty = order_details['quantity']
+                        avg_price = order_details['price']
+                        quote_qty = order_details['value']
+                        
+                        # Update our tracking with actual executed quantity
+                        if order_id in self.active_orders:
+                            self.active_orders[order_id]['filled'] = True
+                            self.active_orders[order_id]['quantity'] = executed_qty
+                            
+                        logger.info(f"Order {order_id} executed: {executed_qty} {symbol.replace('USDT', '')} at avg price: {avg_price:.8f} USDT, total: {quote_qty:.2f} USDT")
+                    else:
+                        # Fall back to order status response if detailed info not available
+                        if order_id in self.active_orders:
+                            self.active_orders[order_id]['filled'] = True
+                        
+                        executed_qty = float(order_status.get('executedQty', 0))
+                        cummulative_quote_qty = float(order_status.get('cummulativeQuoteQty', 0))
+                        
+                        if executed_qty > 0:
+                            avg_price = cummulative_quote_qty / executed_qty
+                            logger.info(f"Order {order_id} executed at avg price: {avg_price} USDT")
                     
                     return True
                     

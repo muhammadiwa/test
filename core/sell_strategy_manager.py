@@ -23,6 +23,7 @@ class SellStrategyManager:
         self.order_executor = order_executor
         self.active_strategies = {}  # Track active selling strategies
         self.monitoring_tasks = {}  # Track price monitoring tasks
+        self.sell_callbacks = []  # Callbacks for when a sell is executed
     
     def add_strategy(self, symbol, buy_price, quantity, strategy_config=None):
         """
@@ -74,6 +75,32 @@ class SellStrategyManager:
         self.monitoring_tasks[strategy_id] = monitoring_task
         
         return strategy_id
+    
+    def register_sell_callback(self, callback):
+        """
+        Register a callback to be called when a sell order is executed.
+        
+        Args:
+            callback: Async function to call with (symbol, buy_price, sell_price, quantity, reason)
+        """
+        self.sell_callbacks.append(callback)
+        logger.debug(f"Registered sell callback, total callbacks: {len(self.sell_callbacks)}")
+        
+    def has_strategy_for_symbol(self, symbol):
+        """
+        Check if a strategy already exists for the given symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            
+        Returns:
+            bool: True if a strategy exists, False otherwise
+        """
+        # Check all active strategies for this symbol
+        for strategy_id, strategy in self.active_strategies.items():
+            if strategy['symbol'] == symbol and strategy['status'] == 'ACTIVE' and not strategy['executed']:
+                return True
+        return False
     
     def remove_strategy(self, strategy_id):
         """
@@ -245,34 +272,70 @@ class SellStrategyManager:
         
         strategy = self.active_strategies[strategy_id]
         symbol = strategy['symbol']
-        quantity = strategy['quantity']
         buy_price = strategy['buy_price']
         
+        # We don't pass the quantity explicitly, as the mexc_api will fetch the current balance
         logger.info(f"Executing sell for {symbol} ({strategy_id}) - Reason: {reason}")
         
         try:
-            # Execute market sell order
-            sell_order = await self.order_executor.execute_market_sell(symbol, quantity)
+            # Execute market sell order - pass None for quantity to use all available balance
+            sell_order = await self.order_executor.execute_market_sell(symbol, None)
             
             if sell_order and sell_order.get('orderId'):
+                order_id = sell_order['orderId']
+                
+                # Get detailed sell order information
+                order_details = await self.mexc_api.get_filled_order_details(symbol, order_id)
+                
                 # Mark strategy as executed
                 strategy['status'] = 'EXECUTED'
                 strategy['executed'] = True
                 strategy['sell_reason'] = reason
                 strategy['sell_time'] = datetime.now()
+                
+                # Update with actual execution details if available
+                if order_details:
+                    sell_price = order_details['price']
+                    executed_qty = order_details['quantity']
+                    quote_qty = order_details['value']
+                    
+                    # Update strategy with actual sell details
+                    strategy['sell_price'] = sell_price
+                    strategy['sell_quantity'] = executed_qty
+                    strategy['sell_value'] = quote_qty
+                    
+                    # Calculate profit/loss
+                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+                    
+                    logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {sell_price:.8f} USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                    
+                    # Execute registered callbacks
+                    for callback in self.sell_callbacks:
+                        try:
+                            await callback(symbol, buy_price, sell_price, executed_qty, reason)
+                        except Exception as e:
+                            logger.error(f"Error executing sell callback: {e}")
+                else:
+                    # Fall back to basic information if detailed info not available
+                    sell_price = float(sell_order.get('price', 0))
+                    executed_qty = float(sell_order.get('executedQty', strategy['quantity']))
+                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+                    
+                    logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+                    
+                    # Execute registered callbacks with basic info
+                    for callback in self.sell_callbacks:
+                        try:
+                            await callback(symbol, buy_price, sell_price, executed_qty, reason)
+                        except Exception as e:
+                            logger.error(f"Error executing sell callback: {e}")
+                
                 self.active_strategies[strategy_id] = strategy
-                
-                # Get execution details for profit calculation
-                sell_price = float(sell_order.get('price', 0))
-                profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
-                
-                logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
-                
                 return True
             else:
                 logger.error(f"Failed to execute sell for {symbol}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error executing sell for {symbol}: {e}")
+            logger.error(f"Failed to execute sell for {symbol}: {e}")
             return False

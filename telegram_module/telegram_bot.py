@@ -88,6 +88,8 @@ class TelegramBot:
             self.application.add_handler(CommandHandler("sell", self.cmd_sell))
             self.application.add_handler(CommandHandler("cancel", self.cmd_cancel))
             self.application.add_handler(CommandHandler("balance", self.cmd_balance))
+            self.application.add_handler(CommandHandler("price", self.cmd_price))
+            self.application.add_handler(CommandHandler("cek", self.cmd_price)) # Alias for price
             
             # Handle unknown commands
             self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
@@ -438,11 +440,16 @@ class TelegramBot:
             "🔹 */help* - Show this help message\n"
             "🔹 */status* - Show bot status\n"
             "🔹 */balance* - Show wallet balance\n"
+            "🔹 */price <pair>* - Check current price of a trading pair\n"
+            "🔹 */cek <pair>* - Alias for /price command\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
             "🔹 */cancel <pair>* - Cancel sniping for a token\n\n"
-            "Example: `/snipe BTCUSDT 100`"
+            "Examples:\n"
+            "- `/snipe BTCUSDT 100`\n"
+            "- `/price ETHUSDT`\n"
+            "- `/cek BTC` (automatically adds USDT suffix)"
         )
         
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -672,6 +679,108 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error fetching balance: {e}")
             await update.message.reply_text(f"❌ Error fetching balance: {str(e)}")
+    
+    def _format_price(self, price):
+        """Helper function to format price based on magnitude."""
+        if price < 0.00001:
+            return f"{price:.8f}"
+        elif price < 0.001:
+            return f"{price:.6f}"
+        elif price < 1:
+            return f"{price:.5f}" 
+        elif price < 1000:
+            return f"{price:.2f}"
+        else:
+            return f"{price:,.2f}"
+    
+    def _normalize_trading_pair(self, pair):
+        """Helper function to normalize trading pair symbol."""
+        pair = pair.upper()
+        if not pair.endswith("USDT"):
+            pair_with_usdt = f"{pair}USDT"
+            pair_note = f"\nNOTE: Using {pair_with_usdt} (assuming USDT trading pair)"
+            return pair_with_usdt, pair_note
+        return pair, ""
+    
+    async def _get_formatted_price_for_pair(self, pair):
+        """Helper function to get and format price for a single trading pair.
+        
+        Returns:
+            Tuple of (formatted_result, error_message)
+            If successful, error_message will be None
+            If failed, formatted_result will be None
+        """
+        try:
+            # Get ticker price from MEXC API
+            ticker = await self.mexc_api.get_ticker_price(pair)
+            
+            if not ticker:
+                return None, f"❌ No data for {pair}"
+                
+            # Extract price from response
+            price = None
+            if isinstance(ticker, list) and ticker:
+                price = float(ticker[0]['price'])
+            elif isinstance(ticker, dict) and 'price' in ticker:
+                price = float(ticker['price'])
+                
+            if price is None:
+                return None, f"❌ Invalid data for {pair}"
+            
+            # Format price
+            price_formatted = self._format_price(price)
+            symbol_clean = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            
+            # Return formatted result
+            return f"💹 *{symbol_clean}*: `{price_formatted} USDT`", None
+                
+        except Exception as e:
+            logger.error(f"Error fetching price for {pair}: {str(e)}")
+            return None, f"❌ Error with {pair}: {str(e)[:50]}..."
+    
+    async def cmd_price(self, update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /price or /cek command to check current price of a trading pair."""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.authorized_users:
+            await update.message.reply_text("⚠️ You are not authorized to use this bot.")
+            return
+        
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("⚠️ Usage: /price <pair1> [pair2] [pair3] ... or /cek <pair>\nExamples:\n- /price BTCUSDT\n- /price BTC ETH SOL")
+            return
+        
+        # Normalize all pairs
+        pairs = [self._normalize_trading_pair(arg)[0] for arg in context.args]
+        
+        if len(pairs) > 5:
+            await update.message.reply_text("⚠️ Too many pairs requested. Please limit to 5 or fewer pairs at once.")
+            return
+            
+        await update.message.reply_text(f"🔍 Fetching current prices for {', '.join(pairs)}...")
+        
+        # Get prices for all pairs
+        results = []
+        errors = []
+        
+        for pair in pairs:
+            result, error = await self._get_formatted_price_for_pair(pair)
+            if result:
+                results.append(result)
+            if error:
+                errors.append(error)
+        
+        # Prepare response message
+        if results:
+            message = "*Current Prices*\n\n" + "\n".join(results)
+            
+            # Add errors at the end if any
+            if errors:
+                message += "\n\n*Errors:*\n" + "\n".join(errors)
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("❌ Could not fetch prices for any of the requested pairs.", parse_mode="Markdown")
     
     async def unknown_command(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle unknown commands."""

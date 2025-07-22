@@ -1,4 +1,5 @@
 import asyncio
+import time
 from loguru import logger
 from api.mexc_api import MexcAPI
 from utils.config import Config
@@ -191,11 +192,24 @@ class OrderExecutor:
             symbol: Trading pair symbol
             order_id: Order ID to monitor
         """
+        # Log all currently registered callbacks at start of monitoring
+        logger.info(f"Starting to monitor order {order_id} - Registered callbacks: {list(self.order_callbacks.keys())}")
         max_retries = Config.MAX_RETRY_ATTEMPTS
         retry_count = 0
         
+        # Set a maximum monitoring time (300 seconds = 5 minutes)
+        max_monitoring_time = 300  # seconds
+        start_time = time.time()
+        
         while retry_count <= max_retries:
             try:
+                # Check if we've exceeded the maximum monitoring time
+                if time.time() - start_time > max_monitoring_time:
+                    logger.warning(f"Exceeded maximum monitoring time ({max_monitoring_time}s) for order {order_id}. Aborting.")
+                    if order_id in self.active_orders:
+                        self.active_orders[order_id]['status'] = 'TIMEOUT'
+                    return False
+                
                 # Check order status
                 order_status = await self.mexc_api.get_order_status(symbol, order_id)
                 
@@ -227,26 +241,41 @@ class OrderExecutor:
                             self.active_orders[order_id]['quantity'] = executed_qty
                             
                             # If this is a buy order, add sell strategy with ACCURATE execution price
+                            # ONLY if no strategy exists for this symbol yet (prevent double strategy)
                             if self.active_orders[order_id]['side'] == 'BUY' and self.sell_strategy_manager:
-                                # Only create strategy if it's a buy order and we have a strategy manager
-                                try:
-                                    # Use the ACTUAL executed average price for setting up sell strategy
-                                    self.sell_strategy_manager.add_strategy(symbol, avg_price, executed_qty)
-                                    logger.info(f"Added sell strategy for {symbol} based on execution price {avg_price:.8f}")
-                                except Exception as e:
-                                    logger.error(f"Error adding sell strategy for {symbol}: {e}")
+                                # Check if a strategy already exists for this symbol
+                                if not self.sell_strategy_manager.has_strategy_for_symbol(symbol):
+                                    # Only create strategy if it's a buy order and we have a strategy manager
+                                    try:
+                                        # Use the ACTUAL executed average price for setting up sell strategy
+                                        self.sell_strategy_manager.add_strategy(symbol, avg_price, executed_qty)
+                                        logger.info(f"Added sell strategy for {symbol} based on execution price {avg_price:.8f}")
+                                    except Exception as e:
+                                        logger.error(f"Error adding sell strategy for {symbol}: {e}")
+                                else:
+                                    logger.info(f"Strategy for {symbol} already exists, not creating a new one")
                             
                         logger.info(f"Order {order_id} executed: {executed_qty} {symbol.replace('USDT', '')} at avg price: {avg_price:.8f} USDT, total: {quote_qty:.2f} USDT")
                         
+                        # Convert order_id to string for consistent lookup
+                        str_order_id = str(order_id)
+                        
                         # Execute any registered callbacks with the ACTUAL execution price and quantity
-                        if order_id in self.order_callbacks:
-                            for callback in self.order_callbacks[order_id]:
+                        if str_order_id in self.order_callbacks:
+                            logger.info(f"Found {len(self.order_callbacks[str_order_id])} callbacks for order {str_order_id}")
+                            for callback in self.order_callbacks[str_order_id]:
                                 try:
+                                    logger.info(f"Executing callback for order {str_order_id} with {symbol}, {executed_qty}, {avg_price}, {quote_qty}")
                                     await callback(symbol, executed_qty, avg_price, quote_qty)
+                                    logger.info(f"Callback execution completed for order {str_order_id}")
                                 except Exception as e:
-                                    logger.error(f"Error executing callback for order {order_id}: {e}")
+                                    logger.error(f"Error executing callback for order {str_order_id}: {e}", exc_info=True)
                             # Clear callbacks after execution
-                            del self.order_callbacks[order_id]
+                            del self.order_callbacks[str_order_id]
+                            logger.info(f"Cleared callbacks for order {str_order_id}")
+                        else:
+                            # Check if maybe the order_id is not a string in the dictionary
+                            logger.warning(f"No callbacks found for order {str_order_id} - Available order_ids: {list(self.order_callbacks.keys())}")
                     else:
                         # Fall back to order status response if detailed info not available
                         if order_id in self.active_orders:
@@ -318,16 +347,28 @@ class OrderExecutor:
         
         return False
         
-    async def register_order_callback(self, order_id, callback):
+    def register_order_callback(self, order_id, callback):
         """
         Register a callback to be executed when an order is filled.
         
         Args:
-            order_id: The order ID
-            callback: Async function to call with (symbol, quantity, price, total) when order is filled
+            order_id: The order ID (string or int)
+            callback: Async function to call with (symbol, quantity, price, total) when order is filled.
+                      Must be defined with: async def callback(symbol, executed_qty, avg_price, total_value)
+        
+        Note:
+            This method accepts and stores an async callback function, but does not call it.
+            The callback will be invoked when the order is detected as filled in _monitor_order_status.
         """
+        # Convert order_id to string for consistency
+        order_id = str(order_id)
+        
         if order_id not in self.order_callbacks:
             self.order_callbacks[order_id] = []
         
         self.order_callbacks[order_id].append(callback)
-        logger.debug(f"Registered callback for order {order_id}")
+        logger.info(f"Registered callback for order {order_id} - Current callbacks: {len(self.order_callbacks[order_id])}")
+        
+        # Log all currently registered callbacks for debugging
+        logger.info(f"Active callbacks for orders: {list(self.order_callbacks.keys())}")
+        return True  # Return immediately for synchronous operation

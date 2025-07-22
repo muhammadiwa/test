@@ -423,6 +423,9 @@ class MexcAPI:
         Returns:
             Dict containing order details or None if failed
         """
+        # Ensure order_id is a string to avoid type mismatches
+        order_id = str(order_id)
+        
         params = {
             'symbol': symbol.upper(),
             'orderId': order_id
@@ -430,9 +433,16 @@ class MexcAPI:
         try:
             logger.info(f"Checking status of order {order_id} for symbol {symbol}")
             result = await self._http_request('GET', self.ORDER_ENDPOINT, params, signed=True)
+            
+            if result:
+                logger.info(f"Order {order_id} status: {result.get('status')}")
+                logger.debug(f"Full order status response: {result}")
+            else:
+                logger.warning(f"Empty response when checking order {order_id} status")
+                
             return result
         except Exception as e:
-            logger.error(f"Failed to get order status for order {order_id}: {str(e)}")
+            logger.error(f"Failed to get order status for order {order_id}: {str(e)}", exc_info=True)
             return None
     
     async def get_filled_order_details(self, symbol, order_id):
@@ -447,11 +457,18 @@ class MexcAPI:
         Returns:
             Dict with 'quantity', 'price', 'value', or None if failed
         """
+        # Ensure order_id is a string to avoid type mismatches in lookups
+        order_id = str(order_id)
+        logger.info(f"Fetching filled order details for {symbol}, order ID: {order_id}")
+        
         order_status = await self.get_order_status(symbol, order_id)
         
         if not order_status:
             logger.error(f"Could not get details for order {order_id}")
             return None
+        
+        # Log the full order status for debugging
+        logger.debug(f"Order status response for {order_id}: {order_status}")
         
         # Check if order is filled
         if order_status.get('status') != 'FILLED':
@@ -467,15 +484,18 @@ class MexcAPI:
             if executed_qty > 0:
                 avg_price = quote_qty / executed_qty
             
-            return {
+            result = {
                 'quantity': executed_qty,
                 'price': avg_price,
                 'value': quote_qty,
                 'side': order_status.get('side', '')
             }
             
+            logger.info(f"Order {order_id} details: {result}")
+            return result
+            
         except Exception as e:
-            logger.error(f"Error calculating order details for {order_id}: {str(e)}")
+            logger.error(f"Error calculating order details for {order_id}: {str(e)}", exc_info=True)
             return None
     
     async def cancel_order(self, symbol, order_id):
@@ -529,16 +549,26 @@ class MexcAPI:
             logger.error(f"WebSocket error: {e}")
             await self.reconnect_websocket(callback)
     
-    async def reconnect_websocket(self, callback):
+    async def reconnect_websocket(self, callback, retry_count=0):
         """Reconnect to WebSocket if the connection is lost."""
         try:
-            await asyncio.sleep(5)  # Wait before reconnecting
+            # Implement exponential backoff
+            max_retries = 10  # Maximum number of retries
+            if retry_count >= max_retries:
+                logger.warning(f"Reached maximum reconnection attempts ({max_retries}). Waiting 60 seconds before trying again.")
+                await asyncio.sleep(60)  # Long wait after too many retries
+                retry_count = 0
+            else:
+                # Exponential backoff: Wait longer with each retry
+                wait_time = min(5 * (2 ** retry_count), 60)  # Max 60 seconds
+                logger.info(f"Waiting {wait_time} seconds before WebSocket reconnect attempt {retry_count+1}")
+                await asyncio.sleep(wait_time)
+            
             await self.connect_websocket(callback)
         except Exception as e:
             logger.error(f"Error reconnecting to WebSocket: {e}")
-            # Try again with increasing delay
-            await asyncio.sleep(10)
-            await self.reconnect_websocket(callback)
+            # Try again with increased retry count
+            await self.reconnect_websocket(callback, retry_count + 1)
     
     async def subscribe_to_new_listings(self):
         """Subscribe to new token listing notifications via WebSocket."""

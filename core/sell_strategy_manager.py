@@ -86,6 +86,22 @@ class SellStrategyManager:
         self.sell_callbacks.append(callback)
         logger.debug(f"Registered sell callback, total callbacks: {len(self.sell_callbacks)}")
         
+    def has_strategy_for_symbol(self, symbol):
+        """
+        Check if a strategy already exists for the given symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            
+        Returns:
+            bool: True if a strategy exists, False otherwise
+        """
+        # Check all active strategies for this symbol
+        for strategy_id, strategy in self.active_strategies.items():
+            if strategy['symbol'] == symbol and strategy['status'] == 'ACTIVE' and not strategy['executed']:
+                return True
+        return False
+    
     def remove_strategy(self, strategy_id):
         """
         Remove a sell strategy.

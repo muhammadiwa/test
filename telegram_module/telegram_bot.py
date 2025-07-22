@@ -253,9 +253,13 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error stopping Telegram bot: {e}")
     
-    async def send_message(self, message):
+    async def send_message(self, message, parse_mode="Markdown"):
         """
         Send a message to the configured chat ID.
+        
+        Args:
+            message: Message text to send
+            parse_mode: The parsing mode, defaults to "Markdown". Set to None for plain text.
         
         Args:
             message: Message text to send
@@ -284,7 +288,11 @@ class TelegramBot:
                                 
                             # Add a longer timeout for messages in case of network issues
                             return await asyncio.wait_for(
-                                self.bot.send_message(chat_id=chat_id, text=message, parse_mode="Markdown"),
+                                self.bot.send_message(
+                                    chat_id=chat_id, 
+                                    text=message, 
+                                    parse_mode=parse_mode
+                                ),
                                 timeout=10.0  # 10 second timeout
                             )
                         except asyncio.TimeoutError:
@@ -314,13 +322,35 @@ class TelegramBot:
             price: Price at which the trade was executed
         """
         emoji = "🟢" if trade_type == "BUY" else "🔴"
+        
+        # Format numbers first to avoid issues with formatting special characters
+        qty_formatted = f"{quantity:.8f}"
+        price_formatted = f"{price:.8f}"
+        total_formatted = f"{price * quantity:.2f}"
+        
+        # Escape any special characters in symbol to avoid Markdown parsing issues
+        clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+        
         message = (
-            f"{emoji} *{trade_type}*: {symbol}\n"
-            f"Quantity: `{quantity:.8f}`\n"
-            f"Price: `{price:.8f}`\n"
-            f"Total: `{price * quantity:.2f} USDT`"
+            f"{emoji} *{trade_type}*: {clean_symbol}\n"
+            f"Quantity: `{qty_formatted}`\n"
+            f"Price: `{price_formatted}`\n"
+            f"Total: `{total_formatted} USDT`"
         )
-        await self.send_message(message)
+        
+        try:
+            await self.send_message(message)
+            logger.info(f"Trade notification sent for {symbol}")
+        except Exception as e:
+            # Fallback to plain text if markdown formatting fails
+            logger.error(f"Failed to send formatted notification: {e}")
+            plain_message = (
+                f"{emoji} {trade_type}: {symbol}\n"
+                f"Quantity: {qty_formatted}\n"
+                f"Price: {price_formatted}\n"
+                f"Total: {total_formatted} USDT"
+            )
+            await self.send_message(plain_message, parse_mode="")
     
     async def send_profit_notification(self, symbol, buy_price, sell_price, quantity, reason):
         """
@@ -336,16 +366,41 @@ class TelegramBot:
         profit = (sell_price - buy_price) * quantity
         profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
         
+        # Format numbers to avoid issues with markdown
+        buy_price_fmt = f"{buy_price:.8f}"
+        sell_price_fmt = f"{sell_price:.8f}"
+        quantity_fmt = f"{quantity:.8f}"
+        profit_fmt = f"{profit:.2f}"
+        profit_pct_fmt = f"{profit_percentage:.2f}"
+        
+        # Clean symbol to avoid markdown parsing issues
+        clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+        
         emoji = "💰" if profit >= 0 else "📉"
         message = (
-            f"{emoji} *PROFIT REPORT*: {symbol}\n"
-            f"Buy Price: `{buy_price:.8f}`\n"
-            f"Sell Price: `{sell_price:.8f}`\n"
-            f"Quantity: `{quantity:.8f}`\n"
-            f"P/L: `{profit:.2f} USDT ({profit_percentage:.2f}%)`\n"
+            f"{emoji} *PROFIT REPORT*: {clean_symbol}\n"
+            f"Buy Price: `{buy_price_fmt}`\n"
+            f"Sell Price: `{sell_price_fmt}`\n"
+            f"Quantity: `{quantity_fmt}`\n"
+            f"P/L: `{profit_fmt} USDT ({profit_pct_fmt}%)`\n"
             f"Reason: {reason}"
         )
-        await self.send_message(message)
+        
+        try:
+            await self.send_message(message)
+            logger.info(f"Profit notification sent for {symbol}")
+        except Exception as e:
+            # Fallback to plain text if markdown formatting fails
+            logger.error(f"Failed to send formatted profit notification: {e}")
+            plain_message = (
+                f"{emoji} PROFIT REPORT: {symbol}\n"
+                f"Buy Price: {buy_price_fmt}\n"
+                f"Sell Price: {sell_price_fmt}\n"
+                f"Quantity: {quantity_fmt}\n"
+                f"P/L: {profit_fmt} USDT ({profit_pct_fmt}%)\n"
+                f"Reason: {reason}"
+            )
+            await self.send_message(plain_message, parse_mode="")
     
     # Command Handlers
     
@@ -470,6 +525,8 @@ class TelegramBot:
         
         if order and order.get('orderId'):
             order_id = order.get('orderId')
+            # Ensure we have a string ID to avoid type mismatch
+            order_id = str(order_id)
             
             # Send initial notification
             await update.message.reply_text("✅ Buy order placed successfully. Waiting for execution details...")
@@ -477,14 +534,39 @@ class TelegramBot:
             # Register callback for when we get accurate execution details
             async def order_callback(symbol, executed_qty, avg_price, total_value):
                 logger.info(f"Received order callback for {symbol}: {executed_qty} @ {avg_price}, total: {total_value}")
-                await update.message.reply_text(
-                    f"✅ Successfully bought {executed_qty} {symbol} at {avg_price:.8f} USDT, total: {total_value:.2f} USDT."
-                )
-                # Send detailed trade notification with accurate price
-                await self.send_trade_notification("BUY", symbol, executed_qty, avg_price)
+                try:
+                    # No need to extract chat_id since we're using our send_message method
+                    
+                    # Format numbers to prevent Markdown parsing issues
+                    qty_formatted = f"{executed_qty:.8f}"
+                    price_formatted = f"{avg_price:.8f}"
+                    total_formatted = f"{total_value:.2f}"
+                    
+                    # Escape symbol for markdown
+                    clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+                    
+                    # Send message using our own send_message method instead of directly using bot
+                    await self.send_message(
+                        f"✅ Successfully bought {qty_formatted} {clean_symbol} at {price_formatted} USDT, total: {total_formatted} USDT."
+                    )
+                    logger.info("Order execution message sent to Telegram successfully")
+                    
+                    # Send detailed trade notification with accurate price
+                    await self.send_trade_notification("BUY", symbol, executed_qty, avg_price)
+                    logger.info("Trade notification sent successfully")
+                except Exception as e:
+                    logger.error(f"Error in Telegram notification callback: {str(e)}", exc_info=True)
             
             # Register our callback to be called when order is filled with accurate price info
-            await self.order_executor.register_order_callback(order_id, order_callback)
+            try:
+                # Log the current order_callbacks state before registration
+                logger.info(f"Before registration - Current callbacks: {list(self.order_executor.order_callbacks.keys() if hasattr(self.order_executor, 'order_callbacks') else [])}")
+                self.order_executor.register_order_callback(order_id, order_callback)
+                logger.info(f"Callback registered for order {order_id}")
+                # Log after registration to confirm
+                logger.info(f"After registration - Current callbacks: {list(self.order_executor.order_callbacks.keys() if hasattr(self.order_executor, 'order_callbacks') else [])}")
+            except Exception as e:
+                logger.error(f"Error registering callback for order {order_id}: {str(e)}", exc_info=True)
         else:
             await update.message.reply_text(f"❌ Failed to buy {pair}. Check logs for details.")
     
@@ -528,7 +610,7 @@ class TelegramBot:
                 await self.send_trade_notification("SELL", symbol, executed_qty, avg_price)
             
             # Register our callback to be called when order is filled with accurate price info
-            await self.order_executor.register_order_callback(order_id, order_callback)
+            self.order_executor.register_order_callback(order_id, order_callback)
         else:
             await update.message.reply_text(f"❌ Failed to sell {pair}. Check logs for details.")
     

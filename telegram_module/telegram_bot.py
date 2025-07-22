@@ -2,6 +2,7 @@ import asyncio
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from loguru import logger
 from utils.config import Config
+from utils.config_manager import ConfigManager
 from api.mexc_api import MexcAPI
 from core.sniper_engine import SniperEngine
 from core.order_executor import OrderExecutor
@@ -37,6 +38,9 @@ class TelegramBot:
         self.sniper_engine = sniper_engine
         self.order_executor = order_executor
         self.sell_strategy_manager = sell_strategy_manager
+        
+        # Initialize config manager
+        self.config_manager = ConfigManager()
         
         # Register callback with sell strategy manager for profit notifications
         if sell_strategy_manager:
@@ -88,6 +92,9 @@ class TelegramBot:
             self.application.add_handler(CommandHandler("sell", self.cmd_sell))
             self.application.add_handler(CommandHandler("cancel", self.cmd_cancel))
             self.application.add_handler(CommandHandler("balance", self.cmd_balance))
+            self.application.add_handler(CommandHandler("price", self.cmd_price))
+            self.application.add_handler(CommandHandler("cek", self.cmd_price)) # Alias for price
+            self.application.add_handler(CommandHandler("config", self.cmd_config))
             
             # Handle unknown commands
             self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
@@ -438,11 +445,19 @@ class TelegramBot:
             "🔹 */help* - Show this help message\n"
             "🔹 */status* - Show bot status\n"
             "🔹 */balance* - Show wallet balance\n"
+            "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices (up to 5 pairs)\n"
+            "🔹 */cek <pair1> [pair2] [pair3]...* - Alias for /price command\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
-            "🔹 */cancel <pair>* - Cancel sniping for a token\n\n"
-            "Example: `/snipe BTCUSDT 100`"
+            "🔹 */cancel <pair>* - Cancel sniping for a token\n"
+            "🔹 */config* - View and modify bot configuration\n\n"
+            "Examples:\n"
+            "- `/snipe BTCUSDT 100`\n"
+            "- `/price ETHUSDT`\n"
+            "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
+            "- `/config list` - List all current configuration values\n"
+            "- `/config set PROFIT_TARGET_PERCENTAGE 5` - Set take profit to 5%\n"
         )
         
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -673,8 +688,228 @@ class TelegramBot:
             logger.error(f"Error fetching balance: {e}")
             await update.message.reply_text(f"❌ Error fetching balance: {str(e)}")
     
+    def _format_price(self, price):
+        """Helper function to format price based on magnitude."""
+        if price < 0.00001:
+            return f"{price:.8f}"
+        elif price < 0.001:
+            return f"{price:.6f}"
+        elif price < 1:
+            return f"{price:.5f}" 
+        elif price < 1000:
+            return f"{price:.2f}"
+        else:
+            return f"{price:,.2f}"
+    
+    def _normalize_trading_pair(self, pair):
+        """Helper function to normalize trading pair symbol."""
+        pair = pair.upper()
+        if not pair.endswith("USDT"):
+            pair_with_usdt = f"{pair}USDT"
+            pair_note = f"\nNOTE: Using {pair_with_usdt} (assuming USDT trading pair)"
+            return pair_with_usdt, pair_note
+        return pair, ""
+    
+    async def _get_formatted_price_for_pair(self, pair):
+        """Helper function to get and format price for a single trading pair.
+        
+        Returns:
+            Tuple of (formatted_result, error_message)
+            If successful, error_message will be None
+            If failed, formatted_result will be None
+        """
+        try:
+            # Get ticker price from MEXC API
+            ticker = await self.mexc_api.get_ticker_price(pair)
+            
+            if not ticker:
+                return None, f"❌ No data for {pair}"
+                
+            # Extract price from response
+            price = None
+            if isinstance(ticker, list) and ticker:
+                price = float(ticker[0]['price'])
+            elif isinstance(ticker, dict) and 'price' in ticker:
+                price = float(ticker['price'])
+                
+            if price is None:
+                return None, f"❌ Invalid data for {pair}"
+            
+            # Format price
+            price_formatted = self._format_price(price)
+            symbol_clean = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            
+            # Return formatted result
+            return f"💹 *{symbol_clean}*: `{price_formatted} USDT`", None
+                
+        except Exception as e:
+            logger.error(f"Error fetching price for {pair}: {str(e)}")
+            return None, f"❌ Error with {pair}: {str(e)[:50]}..."
+    
+    async def cmd_price(self, update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /price or /cek command to check current price of a trading pair."""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.authorized_users:
+            await update.message.reply_text("⚠️ You are not authorized to use this bot.")
+            return
+        
+        if not context.args or len(context.args) < 1:
+            await update.message.reply_text("⚠️ Usage: /price <pair1> [pair2] [pair3] ... or /cek <pair>\nExamples:\n- /price BTCUSDT\n- /price BTC ETH SOL")
+            return
+        
+        # Normalize all pairs
+        pairs = [self._normalize_trading_pair(arg)[0] for arg in context.args]
+        
+        if len(pairs) > 5:
+            await update.message.reply_text("⚠️ Too many pairs requested. Please limit to 5 or fewer pairs at once.")
+            return
+            
+        await update.message.reply_text(f"🔍 Fetching current prices for {', '.join(pairs)}...")
+        
+        # Get prices for all pairs
+        results = []
+        errors = []
+        
+        for pair in pairs:
+            result, error = await self._get_formatted_price_for_pair(pair)
+            if result:
+                results.append(result)
+            if error:
+                errors.append(error)
+        
+        # Prepare response message
+        if results:
+            message = "*Current Prices*\n\n" + "\n".join(results)
+            
+            # Add errors at the end if any
+            if errors:
+                message += "\n\n*Errors:*\n" + "\n".join(errors)
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+        else:
+            await update.message.reply_text("❌ Could not fetch prices for any of the requested pairs.", parse_mode="Markdown")
+    
     async def unknown_command(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle unknown commands."""
         await update.message.reply_text(
             "⚠️ Unknown command. Use /help to see available commands."
         )
+        
+    async def cmd_config(self, update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /config command to view and modify bot configuration."""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.authorized_users:
+            await update.message.reply_text("⚠️ You are not authorized to use this bot.")
+            return
+        
+        # If no arguments provided, show available parameters
+        if not context.args or len(context.args) == 0:
+            params_info = self.config_manager.get_configurable_params_info()
+            message = "⚙️ *Bot Configuration*\n\n"
+            message += "Available commands:\n"
+            message += "- `/config list` - List all configurable parameters\n"
+            message += "- `/config get <param>` - Get the value of a parameter\n"
+            message += "- `/config set <param> <value>` - Set a new value for a parameter\n"
+            message += "- `/config reset <param>` - Reset a parameter to default value\n"
+            message += "- `/config resetall` - Reset all parameters to default values\n\n"
+            message += "Configurable parameters:\n"
+            
+            for param_name, param_info in params_info.items():
+                message += f"- `{param_name}` - {param_info['description']}\n"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            return
+        
+        # Parse command
+        command = context.args[0].lower()
+        
+        # List all parameters and their values
+        if command == "list":
+            params = self.config_manager.get_all_parameters()
+            params_info = self.config_manager.get_configurable_params_info()
+            
+            message = "⚙️ *Current Configuration*\n\n"
+            
+            for param_name, value in params.items():
+                param_info = params_info.get(param_name, {})
+                description = param_info.get('description', 'No description')
+                
+                message += f"*{param_name}*\n"
+                message += f"Value: `{value}`\n"
+                message += f"Description: {description}\n"
+                if 'min' in param_info and 'max' in param_info:
+                    message += f"Range: `{param_info['min']}` to `{param_info['max']}`\n"
+                message += "\n"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            return
+            
+        # Get a specific parameter value
+        elif command == "get":
+            if len(context.args) < 2:
+                await update.message.reply_text("⚠️ Usage: /config get <parameter_name>")
+                return
+                
+            param_name = context.args[1].upper()
+            value = self.config_manager.get_parameter(param_name)
+            
+            if value is not None:
+                param_info = self.config_manager.get_configurable_params_info().get(param_name, {})
+                description = param_info.get('description', 'No description')
+                
+                message = f"⚙️ *{param_name}*\n"
+                message += f"Current value: `{value}`\n"
+                message += f"Description: {description}\n"
+                
+                if 'min' in param_info and 'max' in param_info:
+                    message += f"Allowed range: `{param_info['min']}` to `{param_info['max']}`"
+                
+                await update.message.reply_text(message, parse_mode="Markdown")
+            else:
+                await update.message.reply_text(f"⚠️ Parameter '{param_name}' not found or not configurable.")
+            
+        # Set a parameter value
+        elif command == "set":
+            if len(context.args) < 3:
+                await update.message.reply_text("⚠️ Usage: /config set <parameter_name> <value>")
+                return
+                
+            param_name = context.args[1].upper()
+            value = context.args[2]
+            
+            success, message = self.config_manager.set_parameter(param_name, value)
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        # Reset a parameter to default value
+        elif command == "reset":
+            if len(context.args) < 2:
+                await update.message.reply_text("⚠️ Usage: /config reset <parameter_name>")
+                return
+                
+            param_name = context.args[1].upper()
+            success, message = self.config_manager.reset_parameter(param_name)
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        # Reset all parameters to default values
+        elif command == "resetall":
+            success, message = self.config_manager.reset_all_parameters()
+            
+            if success:
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"⚠️ {message}")
+                
+        else:
+            await update.message.reply_text(
+                "⚠️ Unknown config command. Use /config without arguments to see usage."
+            )

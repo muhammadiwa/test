@@ -57,8 +57,10 @@ class Config:
     RETRY_DELAY = custom_config.get("RETRY_DELAY", float(os.getenv("RETRY_DELAY", "0.5")))  # Delay in seconds between retries
     MIN_ORDER_USDT = custom_config.get("MIN_ORDER_USDT", float(os.getenv("MIN_ORDER_USDT", "1.0")))  # Minimum order size in USDT
     PROFIT_TARGET_PERCENTAGE = custom_config.get("PROFIT_TARGET_PERCENTAGE", float(os.getenv("PROFIT_TARGET_PERCENTAGE", "20")))
+    TP_SELL_PERCENTAGE = custom_config.get("TP_SELL_PERCENTAGE", float(os.getenv("TP_SELL_PERCENTAGE", "100")))  # Sell 100% at TP by default
     STOP_LOSS_PERCENTAGE = custom_config.get("STOP_LOSS_PERCENTAGE", float(os.getenv("STOP_LOSS_PERCENTAGE", "10")))
     TRAILING_STOP_PERCENTAGE = custom_config.get("TRAILING_STOP_PERCENTAGE", float(os.getenv("TRAILING_STOP_PERCENTAGE", "5")))
+    TSL_MIN_ACTIVATION_PERCENTAGE = custom_config.get("TSL_MIN_ACTIVATION_PERCENTAGE", float(os.getenv("TSL_MIN_ACTIVATION_PERCENTAGE", "20")))  # Min 20% price increase to activate TSL
     TIME_BASED_SELL_MINUTES = custom_config.get("TIME_BASED_SELL_MINUTES", int(os.getenv("TIME_BASED_SELL_MINUTES", "30")))
     
     @classmethod

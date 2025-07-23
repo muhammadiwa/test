@@ -27,10 +27,11 @@ Sniper Bot adalah aplikasi terotomatisasi yang terhubung ke MEXC (melalui API We
 - Auto-retry order gagal sampai filled.
 
 ### 3. **Sell Strategy Manager**
-- Take Profit dengan % target (contoh: +20%).
-- Stop Loss dengan % batas bawah (contoh: -10%).
-- Trailing Take Profit (contoh: naik 30%, turun 5%, auto-sell).
-- Time-based selling (sell after X minutes).
+- **Take Profit (TP)** dengan % target (contoh: +50%) - dapat dikonfigurasi untuk jual sebagian atau seluruh posisi
+- **Stop Loss (SL)** dengan % batas bawah (contoh: -10%).
+- **Trailing Stop Loss (TSL)** - aktif setelah harga naik minimum X% dan jual otomatis saat harga turun Y% dari tertinggi
+- **Strategi Hybrid TP+TSL** - jual sebagian di TP dan sisanya dikelola dengan TSL untuk maksimalisasi profit
+- **Time-based selling** (sell after X minutes).
 
 ### 4. **Logging & Monitoring Dashboard**
 - Menampilkan performa per token (Buy price, Sell price, P&L).
@@ -96,8 +97,11 @@ tradebot/
 
 ### **4. Modul Sell Strategy Manager**
 - **Fungsi Utama**:
-  - Mengatur strategi take profit, stop loss, dan trailing stop.
-  - Time-based selling.
+  - **Take Profit (TP)**: Jual sebagian atau seluruh posisi saat target profit tercapai
+  - **Stop Loss (SL)**: Jual saat harga turun ke level tertentu untuk membatasi kerugian
+  - **Trailing Stop Loss (TSL)**: Aktif setelah kenaikan minimum, menjual saat harga turun dari tertinggi
+  - **Strategi Hybrid TP+TSL**: Kombinasi jual sebagian di TP, sisanya dengan TSL untuk maksimalisasi profit
+  - **Time-based selling**: Jual otomatis setelah X menit
 
 ### **5. Logging & Monitoring**
 - **Fungsi Utama**:

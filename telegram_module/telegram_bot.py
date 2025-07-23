@@ -452,12 +452,18 @@ class TelegramBot:
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
             "🔹 */cancel <pair>* - Cancel sniping for a token\n"
             "🔹 */config* - View and modify bot configuration\n\n"
+            "📊 *Advanced Sell Strategy*\n"
+            "- *Take Profit (TP):* Set percentage gain target with `/config set PROFIT_TARGET_PERCENTAGE 50`\n"
+            "- *Partial TP:* Set percentage of position to sell at TP with `/config set TP_SELL_PERCENTAGE 50`\n"
+            "- *Trailing Stop (TSL):* Set percentage from highest price with `/config set TRAILING_STOP_PERCENTAGE 10`\n"
+            "- *TSL Activation:* Set minimum price increase to activate TSL with `/config set TSL_MIN_ACTIVATION_PERCENTAGE 20`\n\n"
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
             "- `/price ETHUSDT`\n"
             "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
             "- `/config list` - List all current configuration values\n"
-            "- `/config set PROFIT_TARGET_PERCENTAGE 5` - Set take profit to 5%\n"
+            "- `/config set PROFIT_TARGET_PERCENTAGE 50` - Set take profit to 50%\n"
+            "- `/config set TP_SELL_PERCENTAGE 50` - Sell 50% of position at take profit\n"
         )
         
         await update.message.reply_text(help_text, parse_mode="Markdown")

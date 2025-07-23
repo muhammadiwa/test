@@ -1,0 +1,83 @@
+
+=========================
+📘 MEKANISME TAKE PROFIT (TP) & TRAILING STOP (TSL)
+=========================
+
+I. 🎯 TAKE PROFIT (TP)
+-------------------------
+Fungsi:
+- Menjual aset otomatis saat harga mencapai target keuntungan tertentu.
+- Mengunci profit tanpa perlu pemantauan manual.
+
+Cara Kerja:
+- Entry di harga $1.00
+- Jika TP diset di 50%, maka bot akan otomatis jual saat harga menyentuh $1.50
+- Bot langsung eksekusi jual sebagian/seluruh sesuai konfigurasi.
+
+Kelebihan:
++ Jaminan profit jika harga menyentuh target.
++ Strategi pasif, cocok untuk exit cepat.
+
+Kekurangan:
+- Jika harga naik lebih tinggi dari TP setelah jual, potensi rugi opportunity.
+- Tidak fleksibel mengikuti tren harga naik lebih lanjut.
+
+-------------------------
+
+II. 🔁 TRAILING STOP LOSS (TSL)
+-------------------------
+Fungsi:
+- Mengunci profit saat harga naik, dan otomatis jual saat harga turun dari puncak sebesar persentase tertentu.
+- Cocok untuk mengikuti tren bullish.
+
+Cara Kerja:
+- Entry di harga $1.00
+- Trailing aktif saat harga naik lebih dari X% (misal 20%)
+- Jika trailing offset 10%, dan harga naik ke $1.50, maka stop loss dipasang di $1.35
+- Jika harga turun ke $1.35, bot jual otomatis.
+
+Kelebihan:
++ Bisa mengikuti tren dan jual di harga tertinggi.
++ Menjaga keuntungan saat market berbalik.
+
+Kekurangan:
+- Tidak menjamin harga jual di puncak.
+- Jika harga tidak naik cukup tinggi, TSL bisa tidak aktif.
+
+-------------------------
+
+III. 🔁 GABUNGAN TP + TSL
+-------------------------
+Strategi:
+- Take Profit 50% saat kenaikan 50%
+- Trailing Stop sisa aset aktif setelah kenaikan 20%, dengan trailing 10%
+
+Simulasi:
+1. Harga entry: $1.00
+2. Harga naik ke $1.20 → TSL aktif
+3. Harga naik ke $1.50 → TP aktif (jual 50%)
+4. Harga naik ke $1.80 lalu turun ke $1.62 → TSL trigger sisa (jual 50%)
+
+Kelebihan:
++ Kombinasi antara profit pasti dan potensi cuan lanjutan.
++ TP menjamin profit, TSL maksimalkan sisa keuntungan.
+
+-------------------------
+
+IV. ⚖️ PERBANDINGAN
+-------------------------
+| Strategi | Jual di target | Ikuti tren naik | Proteksi turun | Saran Penggunaan |
+|----------|----------------|-----------------|----------------|------------------|
+| TP       | ✅              | ❌               | ❌              | Market volatil   |
+| TSL      | ❌              | ✅               | ✅              | Tren kuat        |
+| TP+TSL   | ✅              | ✅               | ✅              | Optimal profit   |
+
+-------------------------
+
+V. 📌 CATATAN PENTING
+-------------------------
+- TSL baru aktif jika harga naik melewati batas awal (misal 20%)
+- Jika harga turun sebelum TSL aktif → tidak ada aksi jual
+- TP dapat dijalankan penuh atau sebagian (misal jual 50%, sisanya TSL)
+- Kombinasi strategi meningkatkan fleksibilitas dan pengendalian risiko
+

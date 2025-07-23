@@ -47,6 +47,12 @@ class ConfigManager:
             'max': 10000.0,
             'description': 'Take profit percentage'
         },
+        'TP_SELL_PERCENTAGE': {
+            'type': float,
+            'min': 1.0,
+            'max': 100.0,
+            'description': 'Percentage of position to sell at take profit (1-100)'
+        },
         'STOP_LOSS_PERCENTAGE': {
             'type': float,
             'min': 0.1,
@@ -58,6 +64,12 @@ class ConfigManager:
             'min': 0.0,
             'max': 100.0,
             'description': 'Trailing stop percentage (0 to disable)'
+        },
+        'TSL_MIN_ACTIVATION_PERCENTAGE': {
+            'type': float,
+            'min': 0.0,
+            'max': 1000.0,
+            'description': 'Minimum price increase percentage to activate TSL (0 to always activate)'
         },
         'TIME_BASED_SELL_MINUTES': {
             'type': int,

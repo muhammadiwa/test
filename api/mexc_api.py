@@ -226,17 +226,60 @@ class MexcAPI:
         return await self._http_request('GET', self.EXCHANGE_INFO_ENDPOINT)
     
     async def get_ticker_price(self, symbol=None):
-        """Get latest price for a specific symbol or all symbols."""
+        """
+        Get the latest price for a symbol or all symbols.
+        
+        Args:
+            symbol: Trading pair symbol (optional, if None, returns all symbols)
+            
+        Returns:
+            Dict with price information or None if failed
+        """
         params = {}
         if symbol:
             params['symbol'] = symbol.upper()
         
-        try:
-            result = await self._http_request('GET', self.TICKER_PRICE_ENDPOINT, params)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to get ticker price for {symbol}: {str(e)}")
-            return None
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                # Make the request
+                result = await self._http_request('GET', self.TICKER_PRICE_ENDPOINT, params)
+                return result
+                
+            except httpx.HTTPStatusError as e:
+                # Handle HTTP errors specifically
+                status_code = e.response.status_code
+                logger.warning(f"HTTP error {status_code} when fetching ticker price for {symbol} (Attempt {attempt+1}/{max_retries})")
+                
+                # For server errors (5xx), we retry
+                if status_code >= 500:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.info(f"Retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                # For client errors (4xx), we don't retry
+                return None
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout when fetching ticker price for {symbol} (Attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    
+            except Exception as e:
+                logger.error(f"Failed to get ticker price for {symbol}: {str(e)} (Attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+        
+        # If we've exhausted all retries
+        logger.error(f"Failed to get ticker price for {symbol} after {max_retries} attempts")
+        return None
             
     async def get_multiple_ticker_prices(self, symbols):
         """Get latest prices for multiple symbols."""

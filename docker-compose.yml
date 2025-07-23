@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  tradebot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradebot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - TZ=UTC
+    # Expose port for dashboard if needed
+    # ports:
+    #   - "8080:8080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

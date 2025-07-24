@@ -7,14 +7,35 @@ services:
       dockerfile: Dockerfile
     container_name: tradebot
     restart: unless-stopped
+    # Add capabilities required for VPN
+    cap_add:
+      - NET_ADMIN  # Required for VPN to modify network interfaces
+      - SYS_ADMIN  # May be needed for some VPN configurations
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env
+      # Volume for storing VPN configurations if needed
+      - ./vpn:/app/vpn
     environment:
       - TZ=UTC
+      # Enable/disable VPN with this environment variable
+      - USE_VPN=true
     # Expose port for dashboard if needed
     # ports:
     #   - "8080:8080"
+    # Resource limits to prevent container from using too much system resources
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    # Health check to monitor container health
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/data/bot_running') else 1)"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:

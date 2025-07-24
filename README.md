@@ -37,6 +37,7 @@ Sniper Bot adalah aplikasi terotomatisasi yang terhubung ke MEXC (melalui API We
 - Menampilkan performa per token (Buy price, Sell price, P&L).
 - Auto-notify via Telegram.
 - Semua pengaturan bisa di setting di bot telegram dan start bot-nya dari Telegram.
+- Melihat orderbook (buy/sell orders) untuk trading pair yang diinginkan.
 
 ---
 
@@ -110,9 +111,13 @@ tradebot/
 
 ---
 
-## � **Docker Deployment**
+## 🐳 **Docker Deployment**
 
 Bot ini bisa dijalankan menggunakan Docker untuk lingkungan yang konsisten dan terisolasi. Ikuti langkah-langkah di [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) untuk detail lengkapnya.
+
+### VPN untuk Akses API MEXC dari Indonesia
+
+Bot ini dilengkapi dengan fitur VPN otomatis untuk mengatasi pembatasan akses API MEXC di Indonesia. Bot akan otomatis terhubung ke server VPN Singapura gratis. Lihat [VPN_GUIDE.md](VPN_GUIDE.md) untuk informasi tentang konfigurasi VPN atau [PANDUAN_INDONESIA.md](PANDUAN_INDONESIA.md) untuk panduan khusus dalam Bahasa Indonesia.
 
 Ringkasan deployment dengan Docker:
 

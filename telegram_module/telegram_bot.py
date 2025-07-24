@@ -480,8 +480,8 @@ class TelegramBot:
             "🔹 */help* - Show this help message\n"
             "🔹 */status* - Show bot status\n"
             "🔹 */balance* - Show wallet balance\n"
-            "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices (up to 5 pairs)\n"
-            "🔹 */cek <pair1> [pair2] [pair3]...* - Alias for /price command\n"
+            "🔹 */price <pair1> [pair2] [pair3]... [--ob]* - Check prices (add --ob to show orderbook)\n"
+            "🔹 */cek <pair1> [pair2] [pair3]... [--noob]* - Check prices with orderbooks (add --noob to hide orderbook)\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
@@ -495,7 +495,9 @@ class TelegramBot:
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
             "- `/price ETHUSDT`\n"
-            "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
+            "- `/cek BTC ETH SOL` (check up to 5 symbols with orderbooks)\n"
+            "- `/price BTC ETH --ob` (check prices with orderbooks)\n"
+            "- `/cek BTC ETH --noob` (check prices without orderbooks)\n"
             "- `/config list` - List all current configuration values\n"
             "- `/config set PROFIT_TARGET_PERCENTAGE 50` - Set take profit to 50%\n"
             "- `/config set TP_SELL_PERCENTAGE 50` - Sell 50% of position at take profit\n"
@@ -805,41 +807,85 @@ class TelegramBot:
             return
         
         if not context.args or len(context.args) < 1:
-            await update.message.reply_text("⚠️ Usage: /price <pair1> [pair2] [pair3] ... or /cek <pair>\nExamples:\n- /price BTCUSDT\n- /price BTC ETH SOL")
+            await update.message.reply_text("⚠️ Usage: /price <pair1> [pair2] [pair3] ... or /cek <pair>\nOptions: --noob to hide orderbook\nExamples:\n- /price BTCUSDT (prices only)\n- /cek BTC ETH SOL (prices with detailed orderbooks)\n- /price BTC --ob (show price with orderbook)\n- /cek BTC ETH --noob (prices only)")
             return
         
+        # Check command name - for /price, don't show orderbook by default, for /cek show it
+        command_name = update.message.text.split(' ')[0].lower()
+        show_order_book = '/cek' in command_name
+        
+        # Allow flags to override the defaults
+        if "--ob" in context.args:
+            show_order_book = True
+            # Remove the flag from args
+            context.args = [arg for arg in context.args if arg != "--ob"]
+        elif "--noob" in context.args:
+            show_order_book = False
+            # Remove the flag from args
+            context.args = [arg for arg in context.args if arg != "--noob"]
+        
+        if not context.args:
+            await update.message.reply_text("⚠️ Please provide at least one trading pair.")
+            return
+            
         # Normalize all pairs
         pairs = [self._normalize_trading_pair(arg)[0] for arg in context.args]
         
+        # Limit the number of pairs to 5 maximum regardless of showing orderbook or not
         if len(pairs) > 5:
             await update.message.reply_text("⚠️ Too many pairs requested. Please limit to 5 or fewer pairs at once.")
             return
             
-        await update.message.reply_text(f"🔍 Fetching current prices for {', '.join(pairs)}...")
+        # No need to limit pairs for orderbook separately since we're showing everything in one message
+            
+        await update.message.reply_text(f"🔍 Fetching data for {', '.join(pairs)}...")
         
-        # Get prices for all pairs
-        results = []
+        # Track errors to report at the end
         errors = []
         
-        for pair in pairs:
-            result, error = await self._get_formatted_price_for_pair(pair)
-            if result:
-                results.append(result)
-            if error:
-                errors.append(error)
-        
-        # Prepare response message
-        if results:
-            message = "*Current Prices*\n\n" + "\n".join(results)
+        if show_order_book:
+            # If showing orderbooks, we'll integrate the price display directly in the orderbook
+            from api.order_book_utils import format_order_book_for_display
             
-            # Add errors at the end if any
-            if errors:
-                message += "\n\n*Errors:*\n" + "\n".join(errors)
-                
-            await update.message.reply_text(message, parse_mode="Markdown")
+            # Collect all orderbooks in one message
+            all_orderbooks = []
+            
+            for i, pair in enumerate(pairs):
+                try:
+                    # Get and format the order book with integrated price display
+                    order_book_text = await format_order_book_for_display(self.mexc_api, pair, 5)
+                    all_orderbooks.append(order_book_text)
+                except Exception as e:
+                    logger.error(f"Error fetching data for {pair}: {str(e)}")
+                    errors.append(f"❌ Error with {pair}: {str(e)[:50]}...")
+            
+            if all_orderbooks:
+                # Combine all orderbooks into one message
+                full_message = "📊 *Token Analysis*\n\n" + "\n\n".join(all_orderbooks)
+                await update.message.reply_text(full_message, parse_mode="Markdown")
+        else:
+            # If not showing orderbooks, just show prices as before
+            results = []
+            
+            for pair in pairs:
+                result, error = await self._get_formatted_price_for_pair(pair)
+                if result:
+                    results.append(result)
+                if error:
+                    errors.append(error)
+            
+            # Prepare response message
+            if results:
+                message = "*Current Prices*\n\n" + "\n".join(results)
+                await update.message.reply_text(message, parse_mode="Markdown")
+        
+        # Display errors if any (at the end, in a single message)
+        if errors:
+            error_message = "*Errors*\n\n" + "\n".join(errors)
+            await update.message.reply_text(error_message, parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Could not fetch prices for any of the requested pairs.", parse_mode="Markdown")
-    
+            
     async def unknown_command(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle unknown commands."""
         await update.message.reply_text(

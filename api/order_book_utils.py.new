@@ -115,7 +115,7 @@ async def format_order_book_for_display(mexc_api, symbol, limit=5):
         order_book = await mexc_api.get_order_book(symbol, limit*2)  # Get double the limit to ensure we have enough levels
         
         if not order_book or 'asks' not in order_book or 'bids' not in order_book:
-            return f"❌ Could not retrieve order book for {symbol}."
+            return "❌ Could not retrieve order book."
         
         asks = order_book['asks'][:limit]  # Lowest sell orders
         bids = order_book['bids'][:limit]  # Highest buy orders
@@ -156,23 +156,23 @@ async def format_order_book_for_display(mexc_api, symbol, limit=5):
         base_currency = symbol
         if "USDT" in symbol:
             base_currency = symbol.replace("USDT", "")
-        
-        # Format in a more compact, modern display
+            
+        # Format the result in a more compact, modern display
         result = f"🔹 {symbol} \n"
             
         # Price information in a nice format
         if current_price:
             # Format price with appropriate precision
-            price_str = f"{current_price:.8f}".rstrip('0').rstrip('.') if current_price < 0.1 else f"{current_price:.5f}".rstrip('0').rstrip('.')
+            price_str = f"{current_price:.8f}".rstrip('0').rstrip('.')
             
             # Add price line with Ask and Bid
             if spread != "N/A":
-                ask_str = f"{best_ask:.8f}".rstrip('0').rstrip('.') if best_ask < 0.1 else f"{best_ask:.5f}".rstrip('0').rstrip('.')
-                bid_str = f"{best_bid:.8f}".rstrip('0').rstrip('.') if best_bid < 0.1 else f"{best_bid:.5f}".rstrip('0').rstrip('.')
+                ask_str = f"{best_ask:.8f}".rstrip('0').rstrip('.')
+                bid_str = f"{best_bid:.8f}".rstrip('0').rstrip('.')
                 result += f"💹 Price: *{price_str} USDT* | Ask: *{ask_str}* | Bid: *{bid_str}*\n"
                 
                 # Add spread info
-                spread_str = f"{spread:.8f}".rstrip('0').rstrip('.') if spread < 0.1 else f"{spread:.5f}".rstrip('0').rstrip('.')
+                spread_str = f"{spread:.8f}".rstrip('0').rstrip('.')
                 result += f"📏 Spread: *{spread_str}* ({spread_percentage:.2f}%)\n\n"
             else:
                 result += f"💹 Price: *{price_str} USDT*\n\n"
@@ -184,7 +184,7 @@ async def format_order_book_for_display(mexc_api, symbol, limit=5):
         for price, amount in asks:
             price_float = float(price)
             amount_float = float(amount)
-            price_str = f"{price_float:.8f}".rstrip('0').rstrip('.') if price_float < 0.1 else f"{price_float:.5f}".rstrip('0').rstrip('.')
+            price_str = f"{price_float:.8f}".rstrip('0').rstrip('.')
             amount_str = f"{amount_float:.2f}".rstrip('0').rstrip('.')
             sell_prices.append(f"{price_str} ({amount_str})")
             
@@ -193,7 +193,7 @@ async def format_order_book_for_display(mexc_api, symbol, limit=5):
         for price, amount in bids:
             price_float = float(price)
             amount_float = float(amount)
-            price_str = f"{price_float:.8f}".rstrip('0').rstrip('.') if price_float < 0.1 else f"{price_float:.5f}".rstrip('0').rstrip('.')
+            price_str = f"{price_float:.8f}".rstrip('0').rstrip('.')
             amount_str = f"{amount_float:.2f}".rstrip('0').rstrip('.')
             buy_prices.append(f"{price_str} ({amount_str})")
             

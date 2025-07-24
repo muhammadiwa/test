@@ -370,8 +370,20 @@ class TelegramBot:
             quantity: Quantity traded
             reason: Reason for selling
         """
-        profit = (sell_price - buy_price) * quantity
-        profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+        # Check if this is a failed order notification
+        is_failed = "_FAILED" in reason
+        
+        # Calculate profit only for successful orders
+        if is_failed:
+            profit = 0
+            profit_percentage = 0
+            emoji = "⚠️"
+            title = "*ORDER FAILED*"
+        else:
+            profit = (sell_price - buy_price) * quantity
+            profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+            emoji = "💰" if profit >= 0 else "📉"
+            title = "*PROFIT REPORT*"
         
         # Format numbers to avoid issues with markdown
         buy_price_fmt = f"{buy_price:.8f}"
@@ -380,33 +392,56 @@ class TelegramBot:
         profit_fmt = f"{profit:.2f}"
         profit_pct_fmt = f"{profit_percentage:.2f}"
         
-        # Clean symbol to avoid markdown parsing issues
+        # Clean symbol and reason to avoid markdown parsing issues
         clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+        clean_reason = str(reason).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
         
-        emoji = "💰" if profit >= 0 else "📉"
-        message = (
-            f"{emoji} *PROFIT REPORT*: {clean_symbol}\n"
-            f"Buy Price: `{buy_price_fmt}`\n"
-            f"Sell Price: `{sell_price_fmt}`\n"
-            f"Quantity: `{quantity_fmt}`\n"
-            f"P/L: `{profit_fmt} USDT ({profit_pct_fmt}%)`\n"
-            f"Reason: {reason}"
-        )
+        # Create appropriate message based on success or failure
+        if is_failed:
+            message = (
+                f"{emoji} {title}: {clean_symbol}\n"
+                f"Buy Price: `{buy_price_fmt}`\n"
+                f"Order Type: `{clean_reason.replace('_FAILED', '')}`\n"
+                f"Quantity: `{quantity_fmt}`\n"
+                f"Status: `Failed to execute`\n"
+                f"Reason: Order execution failed - please check account balance and try again manually"
+            )
+        else:
+            message = (
+                f"{emoji} {title}: {clean_symbol}\n"
+                f"Buy Price: `{buy_price_fmt}`\n"
+                f"Sell Price: `{sell_price_fmt}`\n"
+                f"Quantity: `{quantity_fmt}`\n"
+                f"P/L: `{profit_fmt} USDT ({profit_pct_fmt}%)`\n"
+                f"Reason: {clean_reason}"
+            )
         
         try:
             await self.send_message(message)
-            logger.info(f"Profit notification sent for {symbol}")
+            logger.info(f"{'Failed order' if is_failed else 'Profit'} notification sent for {symbol}")
         except Exception as e:
             # Fallback to plain text if markdown formatting fails
-            logger.error(f"Failed to send formatted profit notification: {e}")
-            plain_message = (
-                f"{emoji} PROFIT REPORT: {symbol}\n"
-                f"Buy Price: {buy_price_fmt}\n"
-                f"Sell Price: {sell_price_fmt}\n"
-                f"Quantity: {quantity_fmt}\n"
-                f"P/L: {profit_fmt} USDT ({profit_pct_fmt}%)\n"
-                f"Reason: {reason}"
-            )
+            logger.error(f"Failed to send formatted notification: {e}")
+            
+            if is_failed:
+                plain_message = (
+                    f"{emoji} ORDER FAILED: {symbol}\n"
+                    f"Buy Price: {buy_price_fmt}\n"
+                    f"Order Type: {reason.replace('_FAILED', '')}\n"
+                    f"Quantity: {quantity_fmt}\n"
+                    f"Status: Failed to execute\n"
+                    f"Reason: Order execution failed - please check account balance"
+                )
+            else:
+                plain_message = (
+                    f"{emoji} PROFIT REPORT: {symbol}\n"
+                    f"Buy Price: {buy_price_fmt}\n"
+                    f"Sell Price: {sell_price_fmt}\n"
+                    f"Quantity: {quantity_fmt}\n"
+                    f"P/L: {profit_fmt} USDT ({profit_pct_fmt}%)\n"
+                    f"Reason: {reason}"
+                )
+                
             await self.send_message(plain_message, parse_mode="")
     
     # Command Handlers
@@ -725,24 +760,33 @@ class TelegramBot:
             If failed, formatted_result will be None
         """
         try:
-            # Get ticker price from MEXC API
+            # Get ticker price from MEXC API with enhanced retry mechanism
             ticker = await self.mexc_api.get_ticker_price(pair)
             
             if not ticker:
-                return None, f"❌ No data for {pair}"
+                return None, f"❌ No data for {pair} - please check if this is a valid trading pair"
                 
-            # Extract price from response
+            # Extract price from response - handle various API response formats
             price = None
             if isinstance(ticker, list) and ticker:
-                price = float(ticker[0]['price'])
+                # Find the matching pair in the list
+                for item in ticker:
+                    if item.get('symbol') == pair:
+                        price = float(item['price'])
+                        break
+                # If we couldn't find our pair in the list, use the first one as fallback
+                if price is None and ticker[0].get('price'):
+                    price = float(ticker[0]['price'])
             elif isinstance(ticker, dict) and 'price' in ticker:
                 price = float(ticker['price'])
                 
             if price is None:
-                return None, f"❌ Invalid data for {pair}"
+                return None, f"❌ Invalid data format received for {pair}"
             
             # Format price
             price_formatted = self._format_price(price)
+            
+            # Escape special Markdown characters
             symbol_clean = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
             
             # Return formatted result
@@ -750,7 +794,7 @@ class TelegramBot:
                 
         except Exception as e:
             logger.error(f"Error fetching price for {pair}: {str(e)}")
-            return None, f"❌ Error with {pair}: {str(e)[:50]}..."
+            return None, f"❌ Error with {pair}: {str(e)[:50]}... Please try again later."
     
     async def cmd_price(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /price or /cek command to check current price of a trading pair."""

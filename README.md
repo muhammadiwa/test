@@ -110,7 +110,34 @@ tradebot/
 
 ---
 
-## 📈 **Langkah Selanjutnya**
+## � **Docker Deployment**
+
+Bot ini bisa dijalankan menggunakan Docker untuk lingkungan yang konsisten dan terisolasi. Ikuti langkah-langkah di [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) untuk detail lengkapnya.
+
+Ringkasan deployment dengan Docker:
+
+1. **Siapkan konfigurasi**:
+   ```bash
+   cp .env.example .env
+   # Edit file .env dengan API key dan konfigurasi Anda
+   ```
+
+2. **Build dan jalankan container**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Cek logs**:
+   ```bash
+   docker-compose logs -f
+   ```
+
+4. **Menghentikan bot**:
+   ```bash
+   docker-compose down
+   ```
+
+## �📈 **Langkah Selanjutnya**
 1. **Implementasi Modul API MEXC**:
    - Buat koneksi WebSocket untuk mendeteksi listing token baru.
    - Implementasikan REST API untuk eksekusi order.

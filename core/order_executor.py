@@ -121,67 +121,84 @@ class OrderExecutor:
             logger.error(f"Error executing market buy for {symbol}: {e}")
             return None
     
-    async def execute_market_sell(self, symbol, quantity=None):
+    async def execute_market_sell(self, symbol, quantity=None, max_retries=3):
         """
         Execute a market sell order for the specified symbol.
         
         Args:
             symbol: Trading pair symbol (e.g., "BTCUSDT")
             quantity: Amount of the base asset to sell (optional, if None, will sell all available)
+            max_retries: Maximum number of retries for API calls
             
         Returns:
             Dict containing order details or None if failed
         """
-        try:
-            logger.info(f"Executing market sell for {symbol}: {quantity if quantity else 'all available'}")
-            
-            # Place market sell order - if quantity is None, the API will use all available balance
-            order = await self.mexc_api.create_market_sell_order(symbol, quantity)
-            
-            if order and order.get('orderId'):
-                order_id = order['orderId']
-                logger.success(f"Market sell order placed: {order_id}")
+        retries = 0
+        while retries <= max_retries:
+            try:
+                logger.info(f"Executing market sell for {symbol}: {quantity if quantity else 'all available'}")
                 
-                # Initialize executed_qty
-                executed_qty = 0.0
+                # Place market sell order - if quantity is None, the API will use all available balance
+                order = await self.mexc_api.create_market_sell_order(symbol, quantity)
                 
-                # Try to get the quantity from different fields in the response
-                if 'executedQty' in order and order['executedQty']:
-                    executed_qty = float(order['executedQty'])
-                elif 'origQty' in order and order['origQty']:
-                    executed_qty = float(order['origQty'])
-                
-                # If quantity is still 0, and we had a quantity parameter, use that
-                if executed_qty <= 0 and quantity:
-                    executed_qty = float(quantity)
-                
-                # If we still don't have a quantity, fetch from order status
-                if executed_qty <= 0:
-                    logger.warning("Could not determine quantity from sell order response, fetching order status")
-                    order_status = await self.mexc_api.get_order_status(symbol, order_id)
-                    if order_status and 'executedQty' in order_status:
-                        executed_qty = float(order_status['executedQty'])
-                
-                # Track this order
-                self.active_orders[order_id] = {
-                    'symbol': symbol,
-                    'side': 'SELL',
-                    'quantity': executed_qty,
-                    'status': 'NEW',
-                    'filled': False
-                }
-                
-                # Start order monitoring
-                asyncio.create_task(self._monitor_order_status(symbol, order_id))
-                
-                return order
-            else:
-                logger.error(f"Failed to place market sell order: {order}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error executing market sell for {symbol}: {e}")
-            return None
+                if order and order.get('orderId'):
+                    order_id = order['orderId']
+                    logger.success(f"Market sell order placed: {order_id}")
+                    
+                    # Initialize executed_qty
+                    executed_qty = 0.0
+                    
+                    # Try to get the quantity from different fields in the response
+                    if 'executedQty' in order and order['executedQty']:
+                        executed_qty = float(order['executedQty'])
+                    elif 'origQty' in order and order['origQty']:
+                        executed_qty = float(order['origQty'])
+                    
+                    # If quantity is still 0, and we had a quantity parameter, use that
+                    if executed_qty <= 0 and quantity:
+                        executed_qty = float(quantity)
+                    
+                    # If we still don't have a quantity, fetch from order status
+                    if executed_qty <= 0:
+                        logger.warning("Could not determine quantity from sell order response, fetching order status")
+                        order_status = await self.mexc_api.get_order_status(symbol, order_id)
+                        if order_status and 'executedQty' in order_status:
+                            executed_qty = float(order_status['executedQty'])
+                    
+                    # Track this order
+                    self.active_orders[order_id] = {
+                        'symbol': symbol,
+                        'side': 'SELL',
+                        'quantity': executed_qty,
+                        'status': 'NEW',
+                        'filled': False
+                    }
+                    
+                    # Start order monitoring
+                    asyncio.create_task(self._monitor_order_status(symbol, order_id))
+                    
+                    return order
+                else:
+                    # If order is None or doesn't have an orderId, retry
+                    retries += 1
+                    if retries <= max_retries:
+                        logger.warning(f"Failed to place market sell order. Retrying ({retries}/{max_retries})...")
+                        await asyncio.sleep(1.0)  # Wait before retrying
+                    else:
+                        logger.error(f"Failed to place market sell order after {max_retries} attempts: {order}")
+                        return None
+                        
+            except Exception as e:
+                retries += 1
+                if retries <= max_retries:
+                    logger.warning(f"Error executing market sell for {symbol}: {e}. Retrying ({retries}/{max_retries})...")
+                    await asyncio.sleep(1.0)  # Wait before retrying
+                else:
+                    logger.error(f"Error executing market sell for {symbol} after {max_retries} attempts: {e}")
+                    return None
+                    
+        # This should not be reached due to the returns above, but just in case
+        return None
     
     async def _monitor_order_status(self, symbol, order_id):
         """

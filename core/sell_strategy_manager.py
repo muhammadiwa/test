@@ -437,6 +437,16 @@ class SellStrategyManager:
                     return True
             else:
                 logger.error(f"Failed to execute sell for {symbol}")
+                
+                # Still notify with failure information so UI can be updated
+                for callback in self.sell_callbacks:
+                    try:
+                        # We still want to notify even if the order failed
+                        # Use buy_price as sell_price to indicate no profit/loss
+                        await callback(symbol, buy_price, buy_price, strategy['quantity'], f"{reason}_FAILED")
+                    except Exception as e:
+                        logger.error(f"Error executing sell callback for failed order: {e}")
+                
                 return False
                 
         except Exception as e:

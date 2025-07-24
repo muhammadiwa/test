@@ -1,11 +1,11 @@
+# Development version - dengan hot reload dan debug features
 services:
-  tradebot:
+  tradebot-dev:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: tradebot
-    restart: unless-stopped
-    # Required for VPN functionality
+    container_name: tradebot-dev
+    restart: "no"  # Don't auto-restart in development
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -16,28 +16,25 @@ services:
       - ./data:/app/data
       - ./.env:/app/.env
       - ./vpn/config.ovpn:/app/vpn/config.ovpn:ro
+      # Mount source code for hot reload (development only)
+      - .:/app
     environment:
       - TZ=Asia/Jakarta
-      # VPN Configuration (optional - can be set in .env file)
       - VPN_USERNAME=${VPN_USERNAME:-}
       - VPN_PASSWORD=${VPN_PASSWORD:-}
-      - VPN_ENABLED=${VPN_ENABLED:-true}
+      - VPN_ENABLED=${VPN_ENABLED:-false}  # Disable VPN by default in dev
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
     ports:
-      # Expose port for dashboard if needed
       - "9876:8080"
+      - "5678:5678"  # Debug port for VS Code
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    # DNS settings for better connectivity
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    # Health check
-    healthcheck:
-      test: ["CMD", "/app/healthcheck.sh"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+    # Override CMD for development (optional)
+    # command: ["python", "-u", "main.py"]

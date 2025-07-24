@@ -3,6 +3,9 @@
 ## 🧠 **Tujuan Utama**
 Mengembangkan bot sniper ultra-cepat yang secara otomatis mendeteksi listing token baru di MEXC, lalu mengeksekusi pembelian di harga paling bawah dan menjual sesuai target profit \\— dengan toleransi waktu super rendah (1ms – 50ms).
 
+## 🌐 **Akses MEXC API dari Indonesia**
+Bot ini dilengkapi dengan fitur VPN terintegrasi untuk mengakses MEXC API yang diblokir di Indonesia. Bot akan otomatis terkoneksi ke server Asia melalui VPN gratis.
+
 ---
 
 ## 📦 **Deskripsi Singkat Aplikasi**
@@ -11,6 +14,82 @@ Sniper Bot adalah aplikasi terotomatisasi yang terhubung ke MEXC (melalui API We
 - Spam transaksi beli segera setelah market pair aktif atau dari 30 detik sebelum aktif supaya tidak tertinggal.
 - Mengatur take profit dan/atau trailing stop.
 - Opsi auto-sell saat harga turun drastis (stop loss).
+
+---
+
+## 🚀 **Quick Start dengan Docker**
+
+### **Prerequisites**
+- Docker Desktop (Windows/Mac) atau Docker Engine (Linux)
+- File konfigurasi VPN (.ovpn) dari penyedia VPN gratis
+
+### **1. Setup Cepat (Windows)**
+```powershell
+# Clone repository
+git clone <repository-url>
+cd tradebot
+
+# Jalankan setup script
+.\setup.ps1
+
+# Atau manual:
+# 1. Copy dan edit konfigurasi
+copy .env.example .env
+notepad .env
+
+# 2. Build dan jalankan
+docker compose up -d
+```
+
+### **2. Setup Cepat (Linux/Mac)**
+```bash
+# Clone repository
+git clone <repository-url>
+cd tradebot
+
+# Jalankan setup script
+chmod +x setup.sh
+./setup.sh
+
+# Atau manual:
+# 1. Copy dan edit konfigurasi
+cp .env.example .env
+nano .env
+
+# 2. Build dan jalankan
+docker compose up -d
+```
+
+### **3. Setup VPN (Wajib untuk Indonesia)**
+1. Daftar akun VPN gratis:
+   - **ProtonVPN Free**: https://protonvpn.com/free-vpn
+   - **Windscribe Free**: https://windscribe.com
+   - **TunnelBear Free**: https://tunnelbear.com
+
+2. Download konfigurasi OpenVPN (.ovpn) untuk server Asia (Singapore, Hong Kong, Japan)
+
+3. Simpan file sebagai `vpn/config.ovpn`
+
+4. Isi username/password VPN di file `.env`:
+   ```
+   VPN_USERNAME=your_vpn_username
+   VPN_PASSWORD=your_vpn_password
+   ```
+
+### **4. Monitoring**
+```bash
+# Lihat logs
+docker compose logs -f
+
+# Cek status
+docker compose ps
+
+# Cek konektivitas MEXC API
+docker compose exec tradebot curl -s https://api.mexc.com/api/v3/ping
+
+# Dashboard (jika diaktifkan)
+# http://localhost:9876
+```
 
 ---
 

@@ -1,0 +1,102 @@
+# Contoh konfigurasi OpenVPN
+# Ganti file ini dengan konfigurasi VPN yang sebenarnya dari provider Anda
+
+# PETUNJUK SETUP VPN:
+# 1. Daftar akun gratis di salah satu provider:
+#    - ProtonVPN Free: https://protonvpn.com/free-vpn
+#    - Windscribe Free: https://windscribe.com  
+#    - TunnelBear Free: https://tunnelbear.com
+#
+# 2. Download file konfigurasi OpenVPN (.ovpn) untuk server Asia
+#    Pilihan server yang direkomendasikan:
+#    - Singapore
+#    - Hong Kong
+#    - Japan
+#    - South Korea
+#
+# 3. Ganti file config.ovpn ini dengan file yang Anda download
+#
+# 4. Set username dan password VPN di file .env:
+#    VPN_USERNAME=your_username
+#    VPN_PASSWORD=your_password
+
+# =============================================================================
+# TEMPLATE KONFIGURASI OPENVPN
+# Hapus bagian ini dan ganti dengan konfigurasi VPN yang sebenarnya
+# =============================================================================
+
+client
+dev tun
+proto udp
+remote your-vpn-server.example.com 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+
+# Sertifikat dan kunci (biasanya sudah ada di file .ovpn dari provider)
+ca ca.crt
+cert client.crt  
+key client.key
+
+# Atau menggunakan inline certificates (contoh dari beberapa provider)
+# <ca>
+# -----BEGIN CERTIFICATE-----
+# ... certificate content here ...
+# -----END CERTIFICATE-----
+# </ca>
+
+# Autentikasi (jika menggunakan username/password)
+auth-user-pass
+
+# Enkripsi dan kompresi
+cipher AES-256-CBC
+auth SHA256
+comp-lzo
+
+# DNS leak protection
+script-security 2
+up /etc/openvpn/update-resolv-conf
+down /etc/openvpn/update-resolv-conf
+
+# Logging
+verb 3
+mute 20
+
+# =============================================================================
+# CONTOH KONFIGURASI UNTUK PROVIDER POPULER:
+# =============================================================================
+
+# ProtonVPN Example:
+# client
+# dev tun
+# proto udp
+# remote jp-free-01.protonvpn.com 1194
+# resolv-retry infinite
+# nobind
+# persist-key
+# persist-tun
+# ca ca.crt
+# cert client.crt
+# key client.key
+# auth-user-pass
+# cipher AES-256-CBC
+# auth SHA512
+# verb 3
+
+# Windscribe Example:
+# client
+# dev tun
+# proto udp
+# remote hk-001.whiskergalaxy.com 1194
+# resolv-retry infinite
+# nobind
+# persist-key
+# persist-tun
+# ca ca.crt
+# cert client.crt
+# key client.key
+# auth-user-pass
+# cipher AES-256-CBC
+# auth SHA1
+# verb 3

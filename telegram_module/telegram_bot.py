@@ -480,13 +480,20 @@ class TelegramBot:
             "🔹 */help* - Show this help message\n"
             "🔹 */status* - Show bot status\n"
             "🔹 */balance* - Show wallet balance\n"
-            "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices (up to 5 pairs)\n"
-            "🔹 */cek <pair1> [pair2] [pair3]...* - Alias for /price command\n"
+            "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices with 24h change (up to 5 pairs)\n"
+            "🔹 */cek <pair1> [pair2] [pair3]...* - Show detailed orderbook with 24h change (up to 3 pairs)\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
             "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
             "🔹 */cancel <pair>* - Cancel sniping for a token\n"
             "🔹 */config* - View and modify bot configuration\n\n"
+            "📊 *Price Commands*\n"
+            "- *Simple prices:* `/price BTC ETH SOL` - Shows price list with 24h change %\n"
+            "- *Detailed orderbook:* `/cek PUMP AIX MBG` - Shows detailed orderbook with current price and 24h change\n\n"
+            "📈 *Price Change Indicators*\n"
+            "- 🟢 Green with + = Price increased in 24h\n"
+            "- 🔴 Red with - = Price decreased in 24h\n"
+            "- ⚪ White = No change (0.00%) or data unavailable\n\n"
             "📊 *Advanced Sell Strategy*\n"
             "- *Take Profit (TP):* Set percentage gain target with `/config set PROFIT_TARGET_PERCENTAGE 50`\n"
             "- *Partial TP:* Set percentage of position to sell at TP with `/config set TP_SELL_PERCENTAGE 50`\n"
@@ -494,8 +501,8 @@ class TelegramBot:
             "- *TSL Activation:* Set minimum price increase to activate TSL with `/config set TSL_MIN_ACTIVATION_PERCENTAGE 20`\n\n"
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
-            "- `/price ETHUSDT`\n"
-            "- `/cek BTC ETH SOL` (check up to 5 symbols at once)\n"
+            "- `/price BTC ETH SOL` (simple price list with 24h change)\n"
+            "- `/cek PUMP AIX MBG` (detailed orderbook with current price and 24h change)\n"
             "- `/config list` - List all current configuration values\n"
             "- `/config set PROFIT_TARGET_PERCENTAGE 50` - Set take profit to 50%\n"
             "- `/config set TP_SELL_PERCENTAGE 50` - Sell 50% of position at take profit\n"
@@ -751,6 +758,143 @@ class TelegramBot:
             return pair_with_usdt, pair_note
         return pair, ""
     
+    async def _get_orderbook_display(self, pair):
+        """Get formatted orderbook display for a trading pair."""
+        try:
+            # Get 24hr ticker data which includes current price and change percentage
+            ticker_24hr = await self.mexc_api.get_24hr_ticker(pair)
+            current_price = None
+            price_change_percent = None
+            
+            if ticker_24hr:
+                if isinstance(ticker_24hr, list) and ticker_24hr:
+                    for item in ticker_24hr:
+                        if item.get('symbol') == pair:
+                            current_price = float(item['lastPrice'])
+                            raw_percent = float(item.get('priceChangePercent', 0))
+                            if abs(raw_percent) > 100:
+                                price_change_percent = raw_percent
+                            else:
+                                price_change_percent = raw_percent * 100
+                            break
+                    if current_price is None and ticker_24hr[0].get('lastPrice'):
+                        current_price = float(ticker_24hr[0]['lastPrice'])
+                        raw_percent = float(ticker_24hr[0].get('priceChangePercent', 0))
+                        if abs(raw_percent) > 100:
+                            price_change_percent = raw_percent
+                        else:
+                            price_change_percent = raw_percent * 100
+                elif isinstance(ticker_24hr, dict) and 'lastPrice' in ticker_24hr:
+                    current_price = float(ticker_24hr['lastPrice'])
+                    raw_percent = float(ticker_24hr.get('priceChangePercent', 0))
+                    if abs(raw_percent) > 100:
+                        price_change_percent = raw_percent
+                    else:
+                        price_change_percent = raw_percent * 100
+            
+            # Get orderbook data from MEXC API
+            orderbook = await self.mexc_api.get_order_book(pair, limit=10)
+            
+            if not orderbook or 'bids' not in orderbook or 'asks' not in orderbook:
+                return None, f"❌ No orderbook data for {pair}"
+            
+            bids = orderbook['bids'][:5]  # Top 5 buy orders
+            asks = orderbook['asks'][:5]  # Top 5 sell orders
+            
+            if not bids or not asks:
+                return None, f"❌ Insufficient orderbook data for {pair}"
+            
+            # Calculate spread
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+            spread = best_ask - best_bid
+            spread_percent = (spread / best_ask) * 100
+            
+            # Format the orderbook display
+            symbol_clean = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            
+            message = f"📊 *Order Book: {symbol_clean}*\n"
+            
+            # Add current price with change percentage if available
+            if current_price:
+                price_formatted = self._format_price(current_price)
+                if price_change_percent is not None:
+                    if price_change_percent > 0:
+                        change_emoji = "🟢"
+                        change_text = f"+{price_change_percent:.2f}%"
+                    elif price_change_percent < 0:
+                        change_emoji = "🔴"
+                        change_text = f"{price_change_percent:.2f}%"
+                    else:
+                        change_emoji = "⚪"
+                        change_text = "0.00%"
+                    message += f"💰 *Current Price*: `{price_formatted} USDT` {change_emoji} `{change_text}`\n"
+                else:
+                    message += f"💰 *Current Price*: `{price_formatted} USDT`\n"
+                
+                # Add 24hr high/low data if available from ticker_24hr
+                if ticker_24hr:
+                    high_24h = None
+                    low_24h = None
+                    
+                    if isinstance(ticker_24hr, list) and ticker_24hr:
+                        for item in ticker_24hr:
+                            if item.get('symbol') == pair:
+                                high_24h = float(item.get('highPrice', 0)) if item.get('highPrice') else None
+                                low_24h = float(item.get('lowPrice', 0)) if item.get('lowPrice') else None
+                                break
+                        if high_24h is None and ticker_24hr[0].get('highPrice'):
+                            high_24h = float(ticker_24hr[0].get('highPrice', 0))
+                            low_24h = float(ticker_24hr[0].get('lowPrice', 0))
+                    elif isinstance(ticker_24hr, dict):
+                        high_24h = float(ticker_24hr.get('highPrice', 0)) if ticker_24hr.get('highPrice') else None
+                        low_24h = float(ticker_24hr.get('lowPrice', 0)) if ticker_24hr.get('lowPrice') else None
+                    
+                    if high_24h is not None and low_24h is not None:
+                        high_formatted = self._format_price(high_24h)
+                        low_formatted = self._format_price(low_24h)
+                        message += f"📈 *24h High*: `{high_formatted}` | 📉 *24h Low*: `{low_formatted}`\n"
+                
+                message += "\n"
+            else:
+                message += "\n"
+                
+            message += f"💹 *Best Ask*: `{self._format_price(best_ask)}`  |  💰 *Best Bid*: `{self._format_price(best_bid)}`\n"
+            message += f"📏 *Spread*: `{self._format_price(spread)}` ({spread_percent:.2f}%)\n\n"
+            
+            # Sell orders (asks) - display in reverse order for better visualization
+            message += "🔴 *SELL ORDERS*\n"
+            for i, ask in enumerate(reversed(asks)):
+                price = float(ask[0])
+                volume = float(ask[1])
+                value = price * volume
+                
+                if i == len(asks) - 1:  # Best ask
+                    message += f"➡️ `{self._format_price(price)}` | Vol: `{volume:,.4f}` | `${value:,.2f}`\n"
+                else:
+                    message += f"   `{self._format_price(price)}` | Vol: `{volume:,.4f}` | `${value:,.2f}`\n"
+            
+            # Separator
+            message += "\n▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️▫️\n\n"
+            
+            # Buy orders (bids)
+            message += "🟢 *BUY ORDERS*\n"
+            for i, bid in enumerate(bids):
+                price = float(bid[0])
+                volume = float(bid[1])
+                value = price * volume
+                
+                if i == 0:  # Best bid
+                    message += f"➡️ `{self._format_price(price)}` | Vol: `{volume:,.4f}` | `${value:,.2f}`\n"
+                else:
+                    message += f"   `{self._format_price(price)}` | Vol: `{volume:,.4f}` | `${value:,.2f}`\n"
+            
+            return message, None
+            
+        except Exception as e:
+            logger.error(f"Error fetching orderbook for {pair}: {str(e)}")
+            return None, f"❌ Error getting orderbook for {pair}: {str(e)[:50]}..."
+
     async def _get_formatted_price_for_pair(self, pair):
         """Helper function to get and format price for a single trading pair.
         
@@ -760,25 +904,45 @@ class TelegramBot:
             If failed, formatted_result will be None
         """
         try:
-            # Get ticker price from MEXC API with enhanced retry mechanism
-            ticker = await self.mexc_api.get_ticker_price(pair)
+            # Get 24hr ticker data which includes price change percentage
+            ticker_24hr = await self.mexc_api.get_24hr_ticker(pair)
             
-            if not ticker:
+            if not ticker_24hr:
                 return None, f"❌ No data for {pair} - please check if this is a valid trading pair"
                 
-            # Extract price from response - handle various API response formats
+            # Extract data from 24hr ticker response
             price = None
-            if isinstance(ticker, list) and ticker:
+            price_change_percent = None
+            
+            if isinstance(ticker_24hr, list) and ticker_24hr:
                 # Find the matching pair in the list
-                for item in ticker:
+                for item in ticker_24hr:
                     if item.get('symbol') == pair:
-                        price = float(item['price'])
+                        price = float(item['lastPrice'])
+                        # Convert price change percent to proper percentage format
+                        raw_percent = float(item.get('priceChangePercent', 0))
+                        # MEXC returns percentage in decimal format (e.g., 0.0142 for 1.42%)
+                        # We need to check if it's already in percentage format or decimal format
+                        if abs(raw_percent) > 100:  # Likely already in percentage format
+                            price_change_percent = raw_percent
+                        else:  # Likely in decimal format, need to multiply by 100
+                            price_change_percent = raw_percent * 100
                         break
                 # If we couldn't find our pair in the list, use the first one as fallback
-                if price is None and ticker[0].get('price'):
-                    price = float(ticker[0]['price'])
-            elif isinstance(ticker, dict) and 'price' in ticker:
-                price = float(ticker['price'])
+                if price is None and ticker_24hr[0].get('lastPrice'):
+                    price = float(ticker_24hr[0]['lastPrice'])
+                    raw_percent = float(ticker_24hr[0].get('priceChangePercent', 0))
+                    if abs(raw_percent) > 100:
+                        price_change_percent = raw_percent
+                    else:
+                        price_change_percent = raw_percent * 100
+            elif isinstance(ticker_24hr, dict) and 'lastPrice' in ticker_24hr:
+                price = float(ticker_24hr['lastPrice'])
+                raw_percent = float(ticker_24hr.get('priceChangePercent', 0))
+                if abs(raw_percent) > 100:
+                    price_change_percent = raw_percent
+                else:
+                    price_change_percent = raw_percent * 100
                 
             if price is None:
                 return None, f"❌ Invalid data format received for {pair}"
@@ -786,18 +950,58 @@ class TelegramBot:
             # Format price
             price_formatted = self._format_price(price)
             
+            # Format percentage change with appropriate emoji
+            if price_change_percent is not None:
+                if price_change_percent > 0:
+                    change_emoji = "🟢"
+                    change_text = f"+{price_change_percent:.2f}%"
+                elif price_change_percent < 0:
+                    change_emoji = "🔴"
+                    change_text = f"{price_change_percent:.2f}%"
+                else:
+                    change_emoji = "⚪"
+                    change_text = "0.00%"
+            else:
+                change_emoji = "⚪"
+                change_text = "N/A"
+            
             # Escape special Markdown characters
             symbol_clean = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
             
-            # Return formatted result
-            return f"💹 *{symbol_clean}*: `{price_formatted} USDT`", None
+            # Get 24hr high/low data if available
+            high_low_text = ""
+            if isinstance(ticker_24hr, list) and ticker_24hr:
+                for item in ticker_24hr:
+                    if item.get('symbol') == pair:
+                        high_24h = float(item.get('highPrice', 0)) if item.get('highPrice') else None
+                        low_24h = float(item.get('lowPrice', 0)) if item.get('lowPrice') else None
+                        if high_24h is not None and low_24h is not None:
+                            high_formatted = self._format_price(high_24h)
+                            low_formatted = self._format_price(low_24h)
+                            high_low_text = f"\n   📈 `{high_formatted}` | 📉 `{low_formatted}`"
+                        break
+                if not high_low_text and ticker_24hr[0].get('highPrice'):
+                    high_24h = float(ticker_24hr[0].get('highPrice', 0))
+                    low_24h = float(ticker_24hr[0].get('lowPrice', 0))
+                    high_formatted = self._format_price(high_24h)
+                    low_formatted = self._format_price(low_24h)
+                    high_low_text = f"\n   📈 `{high_formatted}` | 📉 `{low_formatted}`"
+            elif isinstance(ticker_24hr, dict) and ticker_24hr.get('highPrice'):
+                high_24h = float(ticker_24hr.get('highPrice', 0))
+                low_24h = float(ticker_24hr.get('lowPrice', 0))
+                high_formatted = self._format_price(high_24h)
+                low_formatted = self._format_price(low_24h)
+                high_low_text = f"\n   📈 `{high_formatted}` | 📉 `{low_formatted}`"
+            
+            # Return formatted result with price change and high/low
+            return f"💹 *{symbol_clean}*: `{price_formatted} USDT` {change_emoji} `{change_text}`{high_low_text}", None
                 
         except Exception as e:
             logger.error(f"Error fetching price for {pair}: {str(e)}")
             return None, f"❌ Error with {pair}: {str(e)[:50]}... Please try again later."
     
     async def cmd_price(self, update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /price or /cek command to check current price of a trading pair."""
+        """Handle the /price or /cek command to check current price and orderbook of a trading pair."""
         user_id = str(update.effective_user.id)
         
         if user_id not in self.authorized_users:
@@ -811,34 +1015,67 @@ class TelegramBot:
         # Normalize all pairs
         pairs = [self._normalize_trading_pair(arg)[0] for arg in context.args]
         
-        if len(pairs) > 5:
-            await update.message.reply_text("⚠️ Too many pairs requested. Please limit to 5 or fewer pairs at once.")
-            return
+        # Get the command that was used
+        command = update.message.text.split()[0].lower()
+        is_cek_command = command == "/cek"
+        
+        # For /cek command, show detailed orderbook for each pair
+        if is_cek_command:
+            if len(pairs) > 5:
+                await update.message.reply_text("⚠️ Too many pairs requested for detailed view. Please limit to 3 or fewer pairs at once.")
+                return
             
-        await update.message.reply_text(f"🔍 Fetching current prices for {', '.join(pairs)}...")
-        
-        # Get prices for all pairs
-        results = []
-        errors = []
-        
-        for pair in pairs:
-            result, error = await self._get_formatted_price_for_pair(pair)
-            if result:
-                results.append(result)
-            if error:
-                errors.append(error)
-        
-        # Prepare response message
-        if results:
-            message = "*Current Prices*\n\n" + "\n".join(results)
-            
-            # Add errors at the end if any
-            if errors:
-                message += "\n\n*Errors:*\n" + "\n".join(errors)
+            # Show detailed orderbook for each pair
+            for pair in pairs:
+                await update.message.reply_text(f"🔍 Fetching detailed orderbook for {pair}...")
                 
-            await update.message.reply_text(message, parse_mode="Markdown")
+                # Get orderbook display
+                orderbook_result, error = await self._get_orderbook_display(pair)
+                
+                if orderbook_result:
+                    await update.message.reply_text(orderbook_result, parse_mode="Markdown")
+                else:
+                    # Fallback to simple price if orderbook fails
+                    price_result, price_error = await self._get_formatted_price_for_pair(pair)
+                    if price_result:
+                        fallback_msg = f"*Current Price* (orderbook unavailable)\n\n{price_result}"
+                        if error:
+                            fallback_msg += f"\n\n*Note:* {error}"
+                        await update.message.reply_text(fallback_msg, parse_mode="Markdown")
+                    else:
+                        error_msg = error or price_error or "Unknown error occurred"
+                        await update.message.reply_text(f"❌ {error_msg}", parse_mode="Markdown")
+        
+        # For /price command, show simple price list (multiple pairs)
         else:
-            await update.message.reply_text("❌ Could not fetch prices for any of the requested pairs.", parse_mode="Markdown")
+            if len(pairs) > 5:
+                await update.message.reply_text("⚠️ Too many pairs requested. Please limit to 5 or fewer pairs at once.")
+                return
+                
+            await update.message.reply_text(f"🔍 Fetching current prices for {', '.join(pairs)}...")
+            
+            # Get prices for all pairs
+            results = []
+            errors = []
+            
+            for pair in pairs:
+                result, error = await self._get_formatted_price_for_pair(pair)
+                if result:
+                    results.append(result)
+                if error:
+                    errors.append(error)
+            
+            # Prepare response message
+            if results:
+                message = "*Current Prices*\n\n" + "\n".join(results)
+                
+                # Add errors at the end if any
+                if errors:
+                    message += "\n\n*Errors:*\n" + "\n".join(errors)
+                    
+                await update.message.reply_text(message, parse_mode="Markdown")
+            else:
+                await update.message.reply_text("❌ Could not fetch prices for any of the requested pairs.", parse_mode="Markdown")
     
     async def unknown_command(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle unknown commands."""

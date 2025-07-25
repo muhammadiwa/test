@@ -455,6 +455,51 @@ class MexcAPI:
                 logger.info(f"Retrying market buy order for {symbol} (attempt {retry_count}/{retry_max}) in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
     
+    async def create_limit_buy_order(self, symbol, usdt_amount, price):
+        """
+        Create a limit buy order for the specified symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            usdt_amount: Amount in USDT to spend
+            price: Limit price per unit
+            
+        Returns:
+            Dict containing order details or None if failed
+        """
+        try:
+            # Check minimum order amount from Config
+            min_transaction = Config.MIN_ORDER_USDT
+            
+            if usdt_amount < min_transaction:
+                logger.warning(f"Order amount {usdt_amount} USDT is below minimum requirement of {min_transaction} USDT. Adjusting to {min_transaction} USDT.")
+                usdt_amount = min_transaction
+                
+            # Calculate quantity based on price
+            quantity = usdt_amount / price
+            
+            logger.info(f"Creating limit buy order for {symbol}: {quantity:.8f} units at {price} USDT each (total: {usdt_amount} USDT)")
+            
+            # Standard limit order params
+            params = {
+                'symbol': symbol,
+                'side': 'BUY',
+                'type': 'LIMIT',
+                'timeInForce': 'GTC',  # Good Till Cancelled
+                'quantity': f"{quantity:.8f}",  # Quantity of asset to buy
+                'price': f"{price:.8f}",  # Limit price
+            }
+            
+            # Try to place the order
+            result = await self._http_request('POST', self.ORDER_ENDPOINT, params, signed=True)
+            logger.info(f"Limit buy order created: {result}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to create limit buy order: {str(e)}")
+            raise
+    
     async def create_market_sell_order(self, symbol, quantity=None):
         """
         Create a market sell order.

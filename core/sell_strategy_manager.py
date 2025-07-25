@@ -101,18 +101,52 @@ class SellStrategyManager:
     def has_strategy_for_symbol(self, symbol):
         """
         Check if a strategy already exists for the given symbol.
+        NOTE: This function is now mainly for backwards compatibility.
+        With multiple strategies support, this returns True if ANY active strategy exists for the symbol.
         
         Args:
             symbol: Trading pair symbol (e.g., "BTCUSDT")
             
         Returns:
-            bool: True if a strategy exists, False otherwise
+            bool: True if any active strategy exists, False otherwise
         """
         # Check all active strategies for this symbol
         for strategy_id, strategy in self.active_strategies.items():
             if strategy['symbol'] == symbol and strategy['status'] == 'ACTIVE' and not strategy['executed']:
                 return True
         return False
+    
+    def get_strategies_for_symbol(self, symbol):
+        """
+        Get all active strategies for a given symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            
+        Returns:
+            dict: Dictionary of strategy_id -> strategy for the symbol
+        """
+        strategies = {}
+        for strategy_id, strategy in self.active_strategies.items():
+            if strategy['symbol'] == symbol and strategy['status'] == 'ACTIVE' and not strategy['executed']:
+                strategies[strategy_id] = strategy
+        return strategies
+    
+    def get_total_quantity_for_symbol(self, symbol):
+        """
+        Get total quantity across all active strategies for a symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            
+        Returns:
+            float: Total quantity being monitored for this symbol
+        """
+        total_qty = 0.0
+        for strategy_id, strategy in self.active_strategies.items():
+            if strategy['symbol'] == symbol and strategy['status'] == 'ACTIVE' and not strategy['executed']:
+                total_qty += strategy['quantity']
+        return total_qty
     
     def remove_strategy(self, strategy_id):
         """
@@ -236,6 +270,14 @@ class SellStrategyManager:
                     reason = self._get_sell_reason(strategy_id, current_price)
                     result = await self._execute_sell(strategy_id, reason)
                     
+                    # Check if strategy still exists (it might have been removed in _execute_sell)
+                    if strategy_id not in self.active_strategies:
+                        logger.info(f"Strategy {strategy_id} was removed, stopping monitoring")
+                        break
+                        
+                    # Refresh strategy state after sell execution
+                    strategy = self.active_strategies[strategy_id]
+                    
                     # If it was a full sell or the sell failed, break the loop
                     if not result or strategy['executed']:
                         break
@@ -321,18 +363,21 @@ class SellStrategyManager:
         # Determine sell quantity based on reason and configuration
         is_partial_sell = False
         sell_percentage = 100.0
-        sell_quantity = None  # Default to all available balance
+        current_quantity = strategy['quantity']
         
         # For take profit with partial selling
         if reason.startswith("TAKE_PROFIT") and not strategy['tp_executed'] and strategy['tp_sell_percentage'] < 100:
             is_partial_sell = True
             sell_percentage = strategy['tp_sell_percentage']
             # Calculate exact quantity to sell for partial TP
-            current_quantity = strategy['quantity']
             sell_quantity = current_quantity * (sell_percentage / 100.0)
             logger.info(f"Partial take profit: selling {sell_percentage}% of position ({sell_quantity} of {current_quantity})")
+        else:
+            # For all other sells (stop loss, trailing stop, etc.), sell the exact strategy quantity
+            sell_quantity = current_quantity
+            logger.info(f"Full sell: selling entire strategy position ({sell_quantity} of {current_quantity})")
             
-        logger.info(f"Executing sell for {symbol} ({strategy_id}) - Reason: {reason}")
+        logger.info(f"Executing sell for {symbol} ({strategy_id}) - Reason: {reason} - Quantity: {sell_quantity}")
         
         try:
             # Execute market sell order - pass calculated quantity for partial sells
@@ -341,100 +386,22 @@ class SellStrategyManager:
             if sell_order and sell_order.get('orderId'):
                 order_id = sell_order['orderId']
                 
-                # Get detailed sell order information
-                order_details = await self.mexc_api.get_filled_order_details(symbol, order_id)
-                
-                # For partial take profit, we need special handling
-                if is_partial_sell:
-                    strategy['tp_executed'] = True
-                    
-                    # Only mark as fully executed if we sold everything
-                    if sell_percentage >= 99.9:  # Allow for small rounding errors
-                        strategy['status'] = 'EXECUTED'
-                        strategy['executed'] = True
-                    else:
-                        strategy['status'] = 'PARTIAL_EXECUTED'
-                        # Reduce the quantity for remaining position
-                        if order_details:
-                            executed_qty = order_details['quantity']
-                            strategy['quantity'] -= executed_qty
-                            logger.info(f"Remaining position after partial sell: {strategy['quantity']}")
-                else:
-                    # For full sells (stop loss, trailing stop, etc.)
-                    strategy['status'] = 'EXECUTED'
-                    strategy['executed'] = True
-                
-                strategy['sell_reason'] = reason
-                strategy['sell_time'] = datetime.now()
-                
-                # Update with actual execution details if available
-                if order_details:
-                    sell_price = order_details['price']
-                    executed_qty = order_details['quantity']
-                    quote_qty = order_details['value']
-                    
-                    # Update strategy with actual sell details
-                    strategy['sell_price'] = sell_price
-                    strategy['sell_quantity'] = executed_qty
-                    strategy['sell_value'] = quote_qty
-                    
-                    # Calculate profit/loss
-                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
-                    
-                    # Log message depends on partial vs full sell
-                    if is_partial_sell:
-                        remaining = strategy['quantity']
-                        original = strategy['original_quantity']
-                        sold_pct = (executed_qty / original) * 100 if original > 0 else 0
-                        logger.success(f"Partial sell: {executed_qty} of {symbol.replace('USDT', '')} ({sold_pct:.1f}%) at {sell_price:.8f} " +
-                                      f"USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'}). Remaining: {remaining}")
-                    else:
-                        logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {sell_price:.8f} " +
-                                      f"USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
-                    
-                    # Execute registered callbacks
-                    for callback in self.sell_callbacks:
+                # Register callback to handle sell order completion
+                def create_sell_callback(strategy_id, reason, is_partial):
+                    async def sell_callback(symbol, executed_qty, avg_price, total_value):
                         try:
-                            # Pass additional info for partial sells
-                            if is_partial_sell:
-                                await callback(symbol, buy_price, sell_price, executed_qty, f"{reason} ({sell_percentage}%)")
-                            else:
-                                await callback(symbol, buy_price, sell_price, executed_qty, reason)
+                            logger.info(f"Sell callback triggered for {symbol}: {executed_qty} at {avg_price}, total: {total_value}")
+                            await self._handle_sell_completion(strategy_id, reason, is_partial, executed_qty, avg_price, total_value)
                         except Exception as e:
-                            logger.error(f"Error executing sell callback: {e}")
-                else:
-                    # Fall back to basic information if detailed info not available
-                    sell_price = float(sell_order.get('price', 0))
-                    executed_qty = float(sell_order.get('executedQty', strategy['quantity'] if not is_partial_sell else sell_quantity))
-                    profit_percentage = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
-                    
-                    if is_partial_sell:
-                        logger.success(f"Partial sell: ~{sell_percentage:.1f}% of {symbol} at {sell_price:.8f} " +
-                                      f"({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
-                    else:
-                        logger.success(f"Sold {symbol} at {sell_price:.8f} ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
-                    
-                    # Execute registered callbacks with basic info
-                    for callback in self.sell_callbacks:
-                        try:
-                            # Pass additional info for partial sells
-                            if is_partial_sell:
-                                await callback(symbol, buy_price, sell_price, executed_qty, f"{reason} ({sell_percentage}%)")
-                            else:
-                                await callback(symbol, buy_price, sell_price, executed_qty, reason)
-                        except Exception as e:
-                            logger.error(f"Error executing sell callback: {e}")
+                            logger.error(f"Error in sell callback for {strategy_id}: {e}")
+                    return sell_callback
                 
-                self.active_strategies[strategy_id] = strategy
+                # Register the callback
+                self.order_executor.register_order_callback(order_id, create_sell_callback(strategy_id, reason, is_partial_sell))
+                logger.info(f"Registered sell callback for order {order_id}, strategy {strategy_id}")
                 
-                # For partial sells, continue monitoring
-                if is_partial_sell and strategy['quantity'] > 0:
-                    # The monitoring task will continue
-                    logger.info(f"Continuing to monitor remaining position for {symbol}")
-                    return True
-                else:
-                    # For complete sells, no need to continue monitoring
-                    return True
+                # Return immediately - actual processing will happen in callback
+                return True
             else:
                 logger.error(f"Failed to execute sell for {symbol}")
                 
@@ -452,3 +419,88 @@ class SellStrategyManager:
         except Exception as e:
             logger.error(f"Failed to execute sell for {symbol}: {e}")
             return False
+
+    async def _handle_sell_completion(self, strategy_id, reason, is_partial_sell, executed_qty, avg_price, total_value):
+        """
+        Handle the completion of a sell order with actual execution details.
+        
+        Args:
+            strategy_id: Strategy ID
+            reason: Sell reason 
+            is_partial_sell: Whether this was a partial sell
+            executed_qty: Actual executed quantity
+            avg_price: Actual average execution price
+            total_value: Total value of the sell
+        """
+        if strategy_id not in self.active_strategies:
+            logger.error(f"Strategy {strategy_id} not found for sell completion")
+            return
+            
+        strategy = self.active_strategies[strategy_id]
+        symbol = strategy['symbol']
+        buy_price = strategy['buy_price']
+        
+        logger.info(f"Processing sell completion for {symbol} ({strategy_id}): {executed_qty} at {avg_price:.8f}")
+        
+        # Update strategy with actual sell details
+        strategy['sell_price'] = avg_price
+        strategy['sell_quantity'] = executed_qty
+        strategy['sell_value'] = total_value
+        strategy['sell_reason'] = reason
+        strategy['sell_time'] = datetime.now()
+        
+        # Calculate profit/loss
+        profit_percentage = ((avg_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+        
+        if is_partial_sell:
+            strategy['tp_executed'] = True
+            
+            # For partial sells, update remaining quantity
+            if strategy['quantity'] > executed_qty:
+                strategy['quantity'] -= executed_qty
+                strategy['status'] = 'PARTIAL_EXECUTED'
+                logger.info(f"Partial sell completed. Remaining position: {strategy['quantity']}")
+            else:
+                # If we sold everything, mark as fully executed
+                strategy['status'] = 'EXECUTED'
+                strategy['executed'] = True
+                
+            # Get percentage sold
+            original_qty = strategy.get('original_quantity', strategy['quantity'] + executed_qty)
+            sold_pct = (executed_qty / original_qty) * 100 if original_qty > 0 else 0
+            
+            logger.success(f"Partial sell: {executed_qty} of {symbol.replace('USDT', '')} ({sold_pct:.1f}%) at {avg_price:.8f} " +
+                          f"USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+        else:
+            # For full sells
+            strategy['status'] = 'EXECUTED'
+            strategy['executed'] = True
+            
+            logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {avg_price:.8f} " +
+                          f"USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
+        
+        # Update the strategy
+        self.active_strategies[strategy_id] = strategy
+        
+        # Execute registered callbacks with actual data
+        for callback in self.sell_callbacks:
+            try:
+                if is_partial_sell:
+                    await callback(symbol, buy_price, avg_price, executed_qty, f"{reason} ({executed_qty} sold)")
+                else:
+                    await callback(symbol, buy_price, avg_price, executed_qty, reason)
+            except Exception as e:
+                logger.error(f"Error executing sell callback: {e}")
+        
+        # If fully executed, clean up
+        if strategy['executed']:
+            logger.info(f"Strategy {strategy_id} fully executed, removing from active strategies")
+            
+            # Cancel monitoring task for this strategy
+            if strategy_id in self.monitoring_tasks:
+                self.monitoring_tasks[strategy_id].cancel()
+                del self.monitoring_tasks[strategy_id]
+            
+            # Remove from active strategies
+            if strategy_id in self.active_strategies:
+                del self.active_strategies[strategy_id]

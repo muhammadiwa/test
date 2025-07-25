@@ -17,6 +17,7 @@ class MexcAPI:
     ACCOUNT_ENDPOINT = '/api/v3/account'
     EXCHANGE_INFO_ENDPOINT = '/api/v3/exchangeInfo'
     TICKER_PRICE_ENDPOINT = '/api/v3/ticker/price'
+    TICKER_24HR_ENDPOINT = '/api/v3/ticker/24hr'
     DEPTH_ENDPOINT = '/api/v3/depth'
     OPEN_ORDERS_ENDPOINT = '/api/v3/openOrders'
     
@@ -279,6 +280,61 @@ class MexcAPI:
         
         # If we've exhausted all retries
         logger.error(f"Failed to get ticker price for {symbol} after {max_retries} attempts")
+        return None
+    
+    async def get_24hr_ticker(self, symbol=None):
+        """
+        Get 24hr ticker price change statistics for a symbol or all symbols.
+        
+        Args:
+            symbol: Trading pair symbol (optional, if None, returns all symbols)
+            
+        Returns:
+            Dict with 24hr statistics including price change percentage or None if failed
+            Response includes: symbol, priceChange, priceChangePercent, weightedAvgPrice, 
+                             prevClosePrice, lastPrice, lastQty, bidPrice, askPrice, 
+                             openPrice, highPrice, lowPrice, volume, quoteVolume, 
+                             openTime, closeTime, count
+        """
+        params = {}
+        if symbol:
+            params['symbol'] = symbol.upper()
+        
+        max_retries = 3
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                result = await self._http_request('GET', self.TICKER_24HR_ENDPOINT, params)
+                return result
+                
+            except httpx.HTTPStatusError as e:
+                status_code = e.response.status_code
+                logger.warning(f"HTTP error {status_code} when fetching 24hr ticker for {symbol} (Attempt {attempt+1}/{max_retries})")
+                
+                if status_code >= 500:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        logger.info(f"Retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                return None
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout when fetching 24hr ticker for {symbol} (Attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    
+            except Exception as e:
+                logger.error(f"Failed to get 24hr ticker for {symbol}: {str(e)} (Attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+        
+        logger.error(f"Failed to get 24hr ticker for {symbol} after {max_retries} attempts")
         return None
             
     async def get_multiple_ticker_prices(self, symbols):

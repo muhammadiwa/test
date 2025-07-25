@@ -121,6 +121,55 @@ class OrderExecutor:
             logger.error(f"Error executing market buy for {symbol}: {e}")
             return None
     
+    async def execute_limit_buy(self, symbol, usdt_amount, price):
+        """
+        Execute a limit buy order for the specified symbol.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            usdt_amount: Amount in USDT to spend
+            price: Limit price per unit
+            
+        Returns:
+            Dict containing order details or None if failed
+        """
+        try:
+            logger.info(f"Executing limit buy order for {symbol}: {usdt_amount} USDT at {price} USDT per unit")
+            
+            # Execute the limit buy order via MEXC API
+            order = await self.mexc_api.create_limit_buy_order(symbol, usdt_amount, price)
+            
+            if order and order.get('orderId'):
+                order_id = str(order.get('orderId'))
+                
+                # Store order details for monitoring
+                self.active_orders[order_id] = {
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'type': 'LIMIT',
+                    'order_id': order_id,
+                    'status': order.get('status', 'NEW'),
+                    'original_qty': order.get('origQty', '0'),
+                    'executed_qty': order.get('executedQty', '0'),
+                    'price': str(price),
+                    'usdt_amount': usdt_amount,
+                    'timestamp': time.time()
+                }
+                
+                # Start monitoring the order status
+                monitor_task = asyncio.create_task(self._monitor_order_status(symbol, order_id))
+                self.monitor_tasks[order_id] = monitor_task
+                
+                logger.info(f"Limit buy order created successfully for {symbol}: Order ID {order_id}")
+                return order
+            else:
+                logger.error(f"Failed to create limit buy order for {symbol}: No order ID returned")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error executing limit buy for {symbol}: {e}")
+            return None
+    
     async def execute_market_sell(self, symbol, quantity=None, max_retries=3):
         """
         Execute a market sell order for the specified symbol.
@@ -258,19 +307,15 @@ class OrderExecutor:
                             self.active_orders[order_id]['quantity'] = executed_qty
                             
                             # If this is a buy order, add sell strategy with ACCURATE execution price
-                            # ONLY if no strategy exists for this symbol yet (prevent double strategy)
+                            # Create sell strategy for every BUY order (support multiple strategies per symbol)
                             if self.active_orders[order_id]['side'] == 'BUY' and self.sell_strategy_manager:
-                                # Check if a strategy already exists for this symbol
-                                if not self.sell_strategy_manager.has_strategy_for_symbol(symbol):
-                                    # Only create strategy if it's a buy order and we have a strategy manager
-                                    try:
-                                        # Use the ACTUAL executed average price for setting up sell strategy
-                                        self.sell_strategy_manager.add_strategy(symbol, avg_price, executed_qty)
-                                        logger.info(f"Added sell strategy for {symbol} based on execution price {avg_price:.8f}")
-                                    except Exception as e:
-                                        logger.error(f"Error adding sell strategy for {symbol}: {e}")
-                                else:
-                                    logger.info(f"Strategy for {symbol} already exists, not creating a new one")
+                                # ALWAYS create strategy for each buy order to support multiple positions
+                                try:
+                                    # Use the ACTUAL executed average price for setting up sell strategy
+                                    strategy_id = self.sell_strategy_manager.add_strategy(symbol, avg_price, executed_qty)
+                                    logger.info(f"Added sell strategy {strategy_id} for {symbol} based on execution price {avg_price:.8f}, quantity: {executed_qty}")
+                                except Exception as e:
+                                    logger.error(f"Error adding sell strategy for {symbol}: {e}")
                             
                         logger.info(f"Order {order_id} executed: {executed_qty} {symbol.replace('USDT', '')} at avg price: {avg_price:.8f} USDT, total: {quote_qty:.2f} USDT")
                         

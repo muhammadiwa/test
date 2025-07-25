@@ -95,6 +95,7 @@ class TelegramBot:
             self.application.add_handler(CommandHandler("price", self.cmd_price))
             self.application.add_handler(CommandHandler("cek", self.cmd_price)) # Alias for price
             self.application.add_handler(CommandHandler("config", self.cmd_config))
+            self.application.add_handler(CommandHandler("strategies", self.cmd_strategies))  # New command to view strategies
             
             # Handle unknown commands
             self.application.add_handler(MessageHandler(filters.COMMAND, self.unknown_command))
@@ -483,14 +484,23 @@ class TelegramBot:
             "🔹 */price <pair1> [pair2] [pair3]...* - Check current prices with 24h change (up to 5 pairs)\n"
             "🔹 */cek <pair1> [pair2] [pair3]...* - Show detailed orderbook with 24h change (up to 3 pairs)\n"
             "🔹 */snipe <pair> <amount>* - Add a token to snipe\n"
-            "🔹 */buy <pair> <amount>* - Buy a token immediately\n"
+            "🔹 */buy <pair> <amount> [price]* - Buy a token (market or limit)\n"
             "🔹 */sell <pair> <amount>* - Sell a token immediately\n"
             "🔹 */cancel <pair>* - Cancel sniping for a token\n"
-            "🔹 */config* - View and modify bot configuration\n\n"
+            "🔹 */config* - View and modify bot configuration\n"
+            "🔹 */strategies* - View all active sell strategies\n\n"
             "📊 *Price Commands*\n"
             "- *Simple prices:* `/price BTC ETH SOL` - Shows price list with 24h change %\n"
             "- *Detailed orderbook:* `/cek PUMP AIX MBG` - Shows detailed orderbook with current price and 24h change\n\n"
-            "📈 *Price Change Indicators*\n"
+            "💰 *Buy Commands*\n"
+            "- *Market buy:* `/buy BTCUSDT 100` - Buy immediately at current market price\n"
+            "- *Short format:* `/buy BTC 100` - Same as above (auto-adds USDT)\n"
+            "- *Limit buy:* `/buy BTCUSDT 100 50000` - Place limit order at specified price\n"
+            "- *Short limit:* `/buy PULSE 10 0.09` - Limit buy PULSE at 0.09 USDT\n\n"
+            "� *Strategy Management*\n"
+            "- */strategies* - View all active sell strategies with details\n"
+            "- Shows individual strategies for multiple buy orders of same symbol\n\n"
+            "�📈 *Price Change Indicators*\n"
             "- 🟢 Green with + = Price increased in 24h\n"
             "- 🔴 Red with - = Price decreased in 24h\n"
             "- ⚪ White = No change (0.00%) or data unavailable\n\n"
@@ -501,8 +511,13 @@ class TelegramBot:
             "- *TSL Activation:* Set minimum price increase to activate TSL with `/config set TSL_MIN_ACTIVATION_PERCENTAGE 20`\n\n"
             "Examples:\n"
             "- `/snipe BTCUSDT 100`\n"
+            "- `/buy BTCUSDT 100` (market buy)\n"
+            "- `/buy BTC 100` (market buy - short format)\n"
+            "- `/buy BTCUSDT 100 50000` (limit buy at 50000 USDT per BTC)\n"
+            "- `/buy PULSE 10 0.09` (limit buy PULSE at 0.09 USDT)\n"
             "- `/price BTC ETH SOL` (simple price list with 24h change)\n"
             "- `/cek PUMP AIX MBG` (detailed orderbook with current price and 24h change)\n"
+            "- `/strategies` (view all active sell strategies)\n"
             "- `/config list` - List all current configuration values\n"
             "- `/config set PROFIT_TARGET_PERCENTAGE 50` - Set take profit to 50%\n"
             "- `/config set TP_SELL_PERCENTAGE 50` - Sell 50% of position at take profit\n"
@@ -540,10 +555,15 @@ class TelegramBot:
             return
         
         if not context.args or len(context.args) < 2:
-            await update.message.reply_text("⚠️ Usage: /snipe <pair> <amount>")
+            await update.message.reply_text("⚠️ Usage: /snipe <pair> <amount>\nExample: `/snipe PULSE 100` or `/snipe PULSEUSDT 100`")
             return
         
         pair = context.args[0].upper()
+        
+        # Auto-append USDT if not already present (support /snipe pulse 100 format)
+        if not pair.endswith('USDT'):
+            pair = pair + 'USDT'
+            
         try:
             amount = float(context.args[1])
         except ValueError:
@@ -563,7 +583,7 @@ class TelegramBot:
             await update.message.reply_text(f"✅ Added {pair} to active sniper targets.")
     
     async def cmd_buy(self, update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /buy command."""
+        """Handle the /buy command with support for both market and limit orders."""
         user_id = str(update.effective_user.id)
         
         if user_id not in self.authorized_users:
@@ -571,35 +591,59 @@ class TelegramBot:
             return
         
         if not context.args or len(context.args) < 2:
-            await update.message.reply_text("⚠️ Usage: /buy <pair> <amount>")
+            await update.message.reply_text(
+                "⚠️ Usage:\n"
+                "• `/buy <pair> <amount>` - Market buy\n"
+                "• `/buy <pair> <amount> <price>` - Limit buy\n\n"
+                "Examples:\n"
+                "• `/buy BTCUSDT 100` - Market buy 100 USDT worth\n"
+                "• `/buy BTC 100` - Same as above (auto-adds USDT)\n"
+                "• `/buy PULSE 10` - Market buy 10 USDT worth of PULSE\n"
+                "• `/buy PULSEUSDT 100 50000` - Limit buy 100 USDT worth at 50000 USDT per BTC\n"
+                "• `/buy PULSE 10 0.09` - Limit buy 10 USDT worth of PULSE at 0.09 USDT per token"
+            )
             return
         
         pair = context.args[0].upper()
+        
+        # Auto-append USDT if not already present (support /buy pulse 1 format)
+        if not pair.endswith('USDT'):
+            pair = pair + 'USDT'
+            
         try:
             amount = float(context.args[1])
         except ValueError:
             await update.message.reply_text("⚠️ Amount must be a number.")
             return
         
+        # Check if this is a limit order (3rd argument provided)
+        if len(context.args) >= 3:
+            try:
+                price = float(context.args[2])
+                await self._execute_limit_buy(update, pair, amount, price)
+            except ValueError:
+                await update.message.reply_text("⚠️ Price must be a number.")
+                return
+        else:
+            await self._execute_market_buy(update, pair, amount)
+    
+    async def _execute_market_buy(self, update, pair, amount):
+        """Execute a market buy order."""
         await update.message.reply_text(f"🔄 Executing market buy for {pair} with {amount} USDT...")
         
         # Execute market buy
         order = await self.order_executor.execute_market_buy(pair, amount)
         
         if order and order.get('orderId'):
-            order_id = order.get('orderId')
-            # Ensure we have a string ID to avoid type mismatch
-            order_id = str(order_id)
+            order_id = str(order.get('orderId'))
             
             # Send initial notification
-            await update.message.reply_text("✅ Buy order placed successfully. Waiting for execution details...")
+            await update.message.reply_text("✅ Market buy order placed successfully. Waiting for execution details...")
             
             # Register callback for when we get accurate execution details
             async def order_callback(symbol, executed_qty, avg_price, total_value):
                 logger.info(f"Received order callback for {symbol}: {executed_qty} @ {avg_price}, total: {total_value}")
                 try:
-                    # No need to extract chat_id since we're using our send_message method
-                    
                     # Format numbers to prevent Markdown parsing issues
                     qty_formatted = f"{executed_qty:.8f}"
                     price_formatted = f"{avg_price:.8f}"
@@ -608,7 +652,7 @@ class TelegramBot:
                     # Escape symbol for markdown
                     clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
                     
-                    # Send message using our own send_message method instead of directly using bot
+                    # Send message using our own send_message method
                     await self.send_message(
                         f"✅ Successfully bought {qty_formatted} {clean_symbol} at {price_formatted} USDT, total: {total_formatted} USDT."
                     )
@@ -622,16 +666,92 @@ class TelegramBot:
             
             # Register our callback to be called when order is filled with accurate price info
             try:
-                # Log the current order_callbacks state before registration
                 logger.info(f"Before registration - Current callbacks: {list(self.order_executor.order_callbacks.keys() if hasattr(self.order_executor, 'order_callbacks') else [])}")
                 self.order_executor.register_order_callback(order_id, order_callback)
                 logger.info(f"Callback registered for order {order_id}")
-                # Log after registration to confirm
                 logger.info(f"After registration - Current callbacks: {list(self.order_executor.order_callbacks.keys() if hasattr(self.order_executor, 'order_callbacks') else [])}")
             except Exception as e:
                 logger.error(f"Error registering callback for order {order_id}: {str(e)}", exc_info=True)
         else:
-            await update.message.reply_text(f"❌ Failed to buy {pair}. Check logs for details.")
+            await update.message.reply_text(f"❌ Failed to place market buy order for {pair}. Check logs for details.")
+    
+    async def _execute_limit_buy(self, update, pair, amount, price):
+        """Execute a limit buy order."""
+        try:
+            await update.message.reply_text(
+                f"🔄 Placing limit buy order for {pair}:\n"
+                f"• Amount: {amount} USDT\n"
+                f"• Price: {price} USDT per unit\n"
+                f"• Estimated quantity: {amount/price:.8f} {pair.replace('USDT', '')}"
+            )
+        except Exception as e:
+            logger.error(f"Error sending initial limit buy message: {e}")
+            # Continue with order execution even if message fails
+        
+        # Execute limit buy
+        order = await self.order_executor.execute_limit_buy(pair, amount, price)
+        
+        if order and order.get('orderId'):
+            order_id = str(order.get('orderId'))
+            status = order.get('status', 'UNKNOWN')
+            orig_qty = order.get('origQty', '0')
+            
+            # Send confirmation notification
+            clean_symbol = pair.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            try:
+                await update.message.reply_text(
+                    f"✅ Limit buy order placed successfully!\n"
+                    f"• Pair: {clean_symbol}\n"
+                    f"• Order ID: `{order_id}`\n"
+                    f"• Quantity: `{orig_qty}`\n"
+                    f"• Price: `{price} USDT`\n"
+                    f"• Status: `{status}`\n\n"
+                    f"💡 The order will be executed when the market price reaches your limit price.",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Error sending limit buy confirmation: {e}")
+                # Log the order details even if message fails
+                logger.info(f"Limit buy order placed: {pair} - Order ID: {order_id} - Quantity: {orig_qty} - Price: {price}")
+            
+            # Register callback for order updates
+            async def limit_order_callback(symbol, executed_qty, avg_price, total_value):
+                logger.info(f"Limit order callback for {symbol}: {executed_qty} @ {avg_price}, total: {total_value}")
+                try:
+                    # Format numbers
+                    qty_formatted = f"{executed_qty:.8f}"
+                    price_formatted = f"{avg_price:.8f}"
+                    total_formatted = f"{total_value:.2f}"
+                    
+                    # Escape symbol for markdown
+                    clean_symbol = symbol.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+                    
+                    # Send execution notification
+                    await self.send_message(
+                        f"🎯 Limit buy order executed!\n"
+                        f"• {clean_symbol}: {qty_formatted} units\n"
+                        f"• Execution price: {price_formatted} USDT\n"
+                        f"• Total: {total_formatted} USDT"
+                    )
+                    
+                    # Send detailed trade notification
+                    await self.send_trade_notification("BUY", symbol, executed_qty, avg_price)
+                except Exception as e:
+                    logger.error(f"Error in limit order callback: {str(e)}", exc_info=True)
+            
+            # Register callback
+            try:
+                self.order_executor.register_order_callback(order_id, limit_order_callback)
+            except Exception as e:
+                logger.error(f"Error registering callback for order {order_id}: {str(e)}", exc_info=True)
+        else:
+            # Log the failure details
+            logger.error(f"Failed to place limit buy order for {pair}: {amount} USDT at {price}")
+            try:
+                await update.message.reply_text(f"❌ Failed to place limit buy order for {pair}. Check logs for details.")
+            except Exception as e:
+                logger.error(f"Error sending failure message: {e}")
+                logger.error(f"Original order failure: {pair} - {amount} USDT at {price}")
     
     async def cmd_sell(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /sell command."""
@@ -642,10 +762,15 @@ class TelegramBot:
             return
         
         if not context.args or len(context.args) < 2:
-            await update.message.reply_text("⚠️ Usage: /sell <pair> <amount>")
+            await update.message.reply_text("⚠️ Usage: /sell <pair> <amount>\nExample: `/sell PULSE 100` or `/sell PULSEUSDT 100`")
             return
         
         pair = context.args[0].upper()
+        
+        # Auto-append USDT if not already present (support /sell pulse 100 format)
+        if not pair.endswith('USDT'):
+            pair = pair + 'USDT'
+            
         try:
             amount = float(context.args[1])
         except ValueError:
@@ -686,10 +811,14 @@ class TelegramBot:
             return
         
         if not context.args:
-            await update.message.reply_text("⚠️ Usage: /cancel <pair>")
+            await update.message.reply_text("⚠️ Usage: /cancel <pair>\nExample: `/cancel PULSE` or `/cancel PULSEUSDT`")
             return
         
         pair = context.args[0].upper()
+        
+        # Auto-append USDT if not already present (support /cancel pulse format)
+        if not pair.endswith('USDT'):
+            pair = pair + 'USDT'
         
         # Remove from sniper targets
         if self.sniper_engine.remove_target_pair(pair):
@@ -1200,3 +1329,77 @@ class TelegramBot:
             await update.message.reply_text(
                 "⚠️ Unknown config command. Use /config without arguments to see usage."
             )
+    
+    async def cmd_strategies(self, update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /strategies command to show active sell strategies."""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.authorized_users:
+            await update.message.reply_text("⚠️ You are not authorized to use this bot.")
+            return
+        
+        if not hasattr(self, 'sell_strategy_manager') or not self.sell_strategy_manager:
+            await update.message.reply_text("⚠️ Sell strategy manager not available.")
+            return
+        
+        try:
+            # Get all active strategies
+            active_strategies = {}
+            for strategy_id, strategy in self.sell_strategy_manager.active_strategies.items():
+                if strategy['status'] == 'ACTIVE' and not strategy['executed']:
+                    symbol = strategy['symbol']
+                    if symbol not in active_strategies:
+                        active_strategies[symbol] = []
+                    active_strategies[symbol].append(strategy)
+            
+            if not active_strategies:
+                await update.message.reply_text("📊 No active sell strategies found.")
+                return
+            
+            # Build response message
+            response = "📊 **Active Sell Strategies**\n\n"
+            
+            for symbol, strategies in active_strategies.items():
+                response += f"🪙 **{symbol}**\n"
+                total_qty = sum(s['quantity'] for s in strategies)
+                avg_buy_price = sum(s['buy_price'] * s['quantity'] for s in strategies) / total_qty if total_qty > 0 else 0
+                
+                response += f"   📈 Total Position: `{total_qty:.8f}` {symbol.replace('USDT', '')}\n"
+                response += f"   💰 Avg Buy Price: `{avg_buy_price:.8f}` USDT\n"
+                response += f"   📋 Strategies: `{len(strategies)}` active\n\n"
+                
+                for i, strategy in enumerate(strategies, 1):
+                    buy_price = strategy['buy_price']
+                    quantity = strategy['quantity']
+                    tp_price = strategy['take_profit_price']
+                    sl_price = strategy['stop_loss_price']
+                    tp_pct = strategy['tp_sell_percentage']
+                    tsl_activated = strategy['tsl_activated']
+                    tsl_price = strategy.get('trailing_stop_price', 'Not set')
+                    
+                    response += f"   🔸 **Strategy #{i}**\n"
+                    response += f"      • Quantity: `{quantity:.8f}`\n"
+                    response += f"      • Buy Price: `{buy_price:.8f}` USDT\n"
+                    response += f"      • Take Profit: `{tp_price:.8f}` USDT ({tp_pct}%)\n"
+                    response += f"      • Stop Loss: `{sl_price:.8f}` USDT\n"
+                    if tsl_activated:
+                        response += f"      • TSL Active: `{tsl_price}` USDT ✅\n"
+                    else:
+                        response += f"      • TSL: Not activated ⏳\n"
+                    response += "\n"
+                
+                response += "─" * 30 + "\n\n"
+            
+            # Split message if too long
+            if len(response) > 4000:
+                # Send in chunks
+                parts = response.split("─" * 30)
+                for part in parts:
+                    if part.strip():
+                        await update.message.reply_text(part.strip(), parse_mode="Markdown")
+            else:
+                await update.message.reply_text(response, parse_mode="Markdown")
+                
+        except Exception as e:
+            logger.error(f"Error in strategies command: {e}")
+            await update.message.reply_text("❌ Error retrieving strategy information. Check logs for details.")

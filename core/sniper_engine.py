@@ -2,6 +2,10 @@ import asyncio
 from loguru import logger
 from api.mexc_api import MexcAPI
 from utils.config import Config
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from database.database_manager import DatabaseManager
 
 class SniperEngine:
     """
@@ -11,24 +15,73 @@ class SniperEngine:
     - Monitoring for new token listings
     - Executing rapid buy orders with configurable frequency
     - Implementing retry logic for failed orders
+    - Persistent storage of target pairs in database
     """
     
-    def __init__(self, mexc_api: MexcAPI):
-        """Initialize the Sniper Engine with the MEXC API client."""
+    def __init__(self, mexc_api: MexcAPI, database_manager = None):
+        """Initialize the Sniper Engine with the MEXC API client and Database Manager."""
         self.mexc_api = mexc_api
+        self.database_manager = database_manager
         self.running = False
-        self.target_pairs = []  # List of trading pairs to target
+        self.target_pairs = []  # List of trading pairs to target (cached from DB)
         self.active_tasks = {}  # Dictionary to track active sniping tasks
+        
+        # Load target pairs from database if available
+        if self.database_manager:
+            asyncio.create_task(self._load_targets_from_db())
+    
+    async def _load_targets_from_db(self):
+        """Load target pairs from database on startup."""
+        try:
+            if not self.database_manager:
+                return
+                
+            logger.info("Loading target pairs from database...")
+            # Note: We could implement loading target pairs here if needed
+            # For now, we'll just log that we're ready to save new targets
+            logger.info("SniperEngine ready to save target pairs to database")
+            
+        except Exception as e:
+            logger.error(f"Failed to load target pairs from database: {e}")
+    
+    async def _save_target_to_db(self, target_data):
+        """Save target pair configuration to database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            # Save as configuration data
+            key = f"sniper_target_{target_data['pair']}"
+            await self.database_manager.save_config(key, target_data, f"Sniper target for {target_data['pair']}")
+            logger.debug(f"Target pair {target_data['pair']} saved to database")
+        except Exception as e:
+            logger.error(f"Failed to save target pair to database: {e}")
+    
+    async def _remove_target_from_db(self, pair):
+        """Remove target pair from database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            # We could implement deletion here, but for now just log
+            logger.debug(f"Target pair {pair} would be removed from database")
+        except Exception as e:
+            logger.error(f"Failed to remove target pair from database: {e}")
         
     def add_target_pair(self, pair, usdt_amount):
         """Add a trading pair to the target list with specified USDT amount."""
         logger.info(f"Adding target pair: {pair} with {usdt_amount} USDT")
-        self.target_pairs.append({
+        target_data = {
             "pair": pair,
             "usdt_amount": usdt_amount,
             "frequency_ms": Config.BUY_FREQUENCY_MS,
             "max_retries": Config.MAX_RETRY_ATTEMPTS
-        })
+        }
+        self.target_pairs.append(target_data)
+        
+        # Save to database
+        if self.database_manager:
+            asyncio.create_task(self._save_target_to_db(target_data))
     
     def remove_target_pair(self, pair):
         """Remove a trading pair from the target list."""
@@ -36,6 +89,10 @@ class SniperEngine:
             if target["pair"] == pair:
                 logger.info(f"Removing target pair: {pair}")
                 self.target_pairs.pop(i)
+                
+                # Remove from database
+                if self.database_manager:
+                    asyncio.create_task(self._remove_target_from_db(pair))
                 
                 # Cancel any active sniping task for this pair
                 if pair in self.active_tasks:

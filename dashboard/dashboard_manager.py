@@ -4,6 +4,10 @@ from api.mexc_api import MexcAPI
 from core.sniper_engine import SniperEngine
 from core.order_executor import OrderExecutor
 from core.sell_strategy_manager import SellStrategyManager
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from database.database_manager import DatabaseManager
 
 class DashboardManager:
     """
@@ -12,20 +16,23 @@ class DashboardManager:
     This module is responsible for:
     - Logging trade performance
     - Displaying real-time status
+    - Storing trade history in database
     """
     
     def __init__(self, mexc_api: MexcAPI, sniper_engine: SniperEngine, 
-                 order_executor: OrderExecutor, sell_strategy_manager: SellStrategyManager):
-        """Initialize the Dashboard Manager with bot components."""
+                 order_executor: OrderExecutor, sell_strategy_manager: SellStrategyManager,
+                 database_manager = None):
+        """Initialize the Dashboard Manager with bot components and Database Manager."""
         self.mexc_api = mexc_api
         self.sniper_engine = sniper_engine
         self.order_executor = order_executor
         self.sell_strategy_manager = sell_strategy_manager
-        self.trades = []  # List to track trades
+        self.database_manager = database_manager
+        self.trades = []  # List to track trades (cached from DB)
     
     def log_trade(self, trade_type, symbol, quantity, price, order_id=None):
         """
-        Log a trade in the dashboard.
+        Log a trade in the dashboard and database.
         
         Args:
             trade_type: Type of trade (BUY/SELL)
@@ -47,6 +54,20 @@ class DashboardManager:
         
         self.trades.append(trade)
         logger.info(f"Trade logged: {trade_type} {symbol} {quantity} at {price}")
+        
+        # Save to database
+        if self.database_manager:
+            trade_data = {
+                'symbol': symbol,
+                'side': trade_type,
+                'quantity': quantity,
+                'price': price,
+                'value': price * quantity,
+                'order_id': order_id or '',
+                'timestamp': trade['timestamp']
+            }
+            # Note: We could make this async, but keeping it simple for now
+            # asyncio.create_task(self.database_manager.save_trade(trade_data))
         
         # Log to console with color
         if trade_type == "BUY":

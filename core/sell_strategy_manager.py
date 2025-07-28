@@ -5,6 +5,10 @@ from loguru import logger
 from api.mexc_api import MexcAPI
 from core.order_executor import OrderExecutor
 from utils.config import Config
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from database.database_manager import DatabaseManager
 
 class SellStrategyManager:
     """
@@ -15,15 +19,64 @@ class SellStrategyManager:
     - Implementing stop loss strategies
     - Implementing trailing stop strategies
     - Time-based selling
+    - Persistent storage of strategies in database
     """
     
-    def __init__(self, mexc_api: MexcAPI, order_executor: OrderExecutor):
-        """Initialize the Sell Strategy Manager with the MEXC API client and Order Executor."""
+    def __init__(self, mexc_api: MexcAPI, order_executor: 'OrderExecutor', database_manager = None):
+        """Initialize the Sell Strategy Manager with the MEXC API client, Order Executor, and Database Manager."""
         self.mexc_api = mexc_api
         self.order_executor = order_executor
-        self.active_strategies = {}  # Track active selling strategies
+        self.database_manager = database_manager
+        self.active_strategies = {}  # Track active selling strategies (cached from DB)
         self.monitoring_tasks = {}  # Track price monitoring tasks
         self.sell_callbacks = []  # Callbacks for when a sell is executed
+        
+        # Load active strategies from database if available
+        if self.database_manager:
+            asyncio.create_task(self._load_strategies_from_db())
+    
+    async def _load_strategies_from_db(self):
+        """Load active strategies from database on startup."""
+        try:
+            if not self.database_manager:
+                return
+                
+            logger.info("Loading active strategies from database...")
+            strategies = await self.database_manager.load_active_strategies()
+            
+            for strategy_id, strategy_data in strategies.items():
+                self.active_strategies[strategy_id] = strategy_data
+                # Restart monitoring for each strategy
+                monitoring_task = asyncio.create_task(self._monitor_price(strategy_id))
+                self.monitoring_tasks[strategy_id] = monitoring_task
+                
+            logger.info(f"Loaded {len(strategies)} active strategies from database")
+            
+        except Exception as e:
+            logger.error(f"Failed to load strategies from database: {e}")
+    
+    async def _save_strategy_to_db(self, strategy_id: str):
+        """Save strategy to database."""
+        if not self.database_manager or strategy_id not in self.active_strategies:
+            return
+            
+        try:
+            strategy_data = self.active_strategies[strategy_id]
+            await self.database_manager.save_strategy(strategy_id, strategy_data)
+            logger.debug(f"Strategy {strategy_id} saved to database")
+        except Exception as e:
+            logger.error(f"Failed to save strategy {strategy_id} to database: {e}")
+    
+    async def _remove_strategy_from_db(self, strategy_id: str):
+        """Remove strategy from database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            await self.database_manager.remove_strategy(strategy_id)
+            logger.debug(f"Strategy {strategy_id} removed from database")
+        except Exception as e:
+            logger.error(f"Failed to remove strategy {strategy_id} from database: {e}")
     
     def add_strategy(self, symbol, buy_price, quantity, strategy_config=None):
         """
@@ -76,6 +129,9 @@ class SellStrategyManager:
             'status': 'ACTIVE',
             'executed': False
         }
+        
+        # Save to database
+        asyncio.create_task(self._save_strategy_to_db(strategy_id))
         
         # Log details with TSL activation price
         logger.info(f"Added sell strategy for {symbol}: TP={take_profit_price:.8f} ({strategy_config['tp_sell_percentage']}%), " +
@@ -164,6 +220,9 @@ class SellStrategyManager:
                 self.monitoring_tasks[strategy_id].cancel()
                 del self.monitoring_tasks[strategy_id]
             
+            # Remove from database
+            asyncio.create_task(self._remove_strategy_from_db(strategy_id))
+            
             # Remove strategy
             del self.active_strategies[strategy_id]
             logger.info(f"Removed sell strategy {strategy_id}")
@@ -189,11 +248,12 @@ class SellStrategyManager:
         """Update highest price and trailing stop if needed."""
         strategy = self.active_strategies[strategy_id]
         symbol = strategy['symbol']
+        update_needed = False
         
         # Update highest price tracking
         if current_price > strategy['highest_price']:
             strategy['highest_price'] = current_price
-            self.active_strategies[strategy_id] = strategy
+            update_needed = True
             
             # Check if TSL activation condition is met
             if not strategy['tsl_activated'] and strategy['trailing_stop_percentage'] > 0:
@@ -203,7 +263,7 @@ class SellStrategyManager:
                     trailing_stop = current_price * (1 - strategy['trailing_stop_percentage'] / 100)
                     strategy['trailing_stop_price'] = trailing_stop
                     strategy['tsl_activated'] = True
-                    self.active_strategies[strategy_id] = strategy
+                    update_needed = True
                     logger.info(f"{symbol} TSL activated! Price {current_price:.8f} >= activation {strategy['tsl_activation_price']:.8f}, " +
                                f"setting trailing stop at {trailing_stop:.8f}")
             
@@ -215,8 +275,16 @@ class SellStrategyManager:
                 # Only update if new trailing stop is higher than current one
                 if not strategy['trailing_stop_price'] or new_trailing_stop > strategy['trailing_stop_price']:
                     strategy['trailing_stop_price'] = new_trailing_stop
-                    self.active_strategies[strategy_id] = strategy
+                    update_needed = True
                     logger.debug(f"{symbol} updated trailing stop to {new_trailing_stop:.8f} as price reached {current_price:.8f}")
+        
+        # Update strategy in memory
+        if update_needed:
+            self.active_strategies[strategy_id] = strategy
+            # Save price data and strategy update to database
+            if self.database_manager:
+                asyncio.create_task(self.database_manager.save_price_data(symbol, current_price))
+                asyncio.create_task(self._save_strategy_to_db(strategy_id))
     
     async def _get_current_price(self, symbol):
         """Get current price for a symbol."""
@@ -479,8 +547,11 @@ class SellStrategyManager:
             logger.success(f"Sold {executed_qty} {symbol.replace('USDT', '')} at {avg_price:.8f} " +
                           f"USDT ({profit_percentage:.2f}% {'profit' if profit_percentage >= 0 else 'loss'})")
         
-        # Update the strategy
+        # Update the strategy in memory and database
         self.active_strategies[strategy_id] = strategy
+        
+        # Save strategy update to database
+        asyncio.create_task(self._save_strategy_to_db(strategy_id))
         
         # Execute registered callbacks with actual data
         for callback in self.sell_callbacks:
@@ -501,6 +572,6 @@ class SellStrategyManager:
                 self.monitoring_tasks[strategy_id].cancel()
                 del self.monitoring_tasks[strategy_id]
             
-            # Remove from active strategies
+            # Remove from active strategies (but keep in database for history)
             if strategy_id in self.active_strategies:
                 del self.active_strategies[strategy_id]

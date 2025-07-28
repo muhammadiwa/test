@@ -9,6 +9,7 @@ from core.order_executor import OrderExecutor
 from core.sell_strategy_manager import SellStrategyManager
 from telegram_module.telegram_bot import TelegramBot
 from dashboard.dashboard_manager import DashboardManager
+from database.database_manager import DatabaseManager
 
 # Global variables to track components
 mexc_api = None
@@ -17,10 +18,17 @@ order_executor = None
 sell_strategy_manager = None
 telegram_bot = None
 dashboard_manager = None
+database_manager = None
 
 async def setup():
     """Set up and initialize all components."""
-    global mexc_api, sniper_engine, order_executor, sell_strategy_manager, telegram_bot, dashboard_manager
+    global mexc_api, sniper_engine, order_executor, sell_strategy_manager, telegram_bot, dashboard_manager, database_manager
+    
+    # Initialize database first
+    logger.info("Initializing database...")
+    database_manager = DatabaseManager("data/tradebot.db")
+    await database_manager.initialize()
+    logger.success("Database initialized successfully")
     
     # Validate configuration
     if not Config.validate():
@@ -42,18 +50,18 @@ async def setup():
         logger.error(f"Error connecting to MEXC API: {e}")
         return False
     
-    # Initialize components
+    # Initialize components with database support
     logger.info("Initializing bot components...")
-    order_executor = OrderExecutor(mexc_api)
-    sniper_engine = SniperEngine(mexc_api)
-    sell_strategy_manager = SellStrategyManager(mexc_api, order_executor)
+    order_executor = OrderExecutor(mexc_api, database_manager)
+    sniper_engine = SniperEngine(mexc_api, database_manager)
+    sell_strategy_manager = SellStrategyManager(mexc_api, order_executor, database_manager)
     
     # Connect components (bidirectional references)
     order_executor.sell_strategy_manager = sell_strategy_manager
     
-    # Initialize Dashboard
+    # Initialize Dashboard with database support
     dashboard_manager = DashboardManager(
-        mexc_api, sniper_engine, order_executor, sell_strategy_manager
+        mexc_api, sniper_engine, order_executor, sell_strategy_manager, database_manager
     )
     logger.info("Dashboard initialized")
     
@@ -108,6 +116,10 @@ async def stop():
     # Close WebSocket connection
     if mexc_api:
         await mexc_api.close_websocket()
+    
+    # Close database connection
+    if database_manager:
+        await database_manager.close()
     
     logger.success("Sniper Bot has been stopped")
 

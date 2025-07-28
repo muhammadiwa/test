@@ -3,6 +3,10 @@ import time
 from loguru import logger
 from api.mexc_api import MexcAPI
 from utils.config import Config
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from database.database_manager import DatabaseManager
 
 class OrderExecutor:
     """
@@ -12,15 +16,68 @@ class OrderExecutor:
     - Executing market orders
     - Handling order filling and retries
     - Tracking order status
+    - Persistent storage of orders in database
     """
     
-    def __init__(self, mexc_api: MexcAPI):
-        """Initialize the Order Executor with the MEXC API client."""
+    def __init__(self, mexc_api: MexcAPI, database_manager = None):
+        """Initialize the Order Executor with the MEXC API client and Database Manager."""
         self.mexc_api = mexc_api
-        self.active_orders = {}  # Track active orders by order ID
+        self.database_manager = database_manager
+        self.active_orders = {}  # Track active orders by order ID (cached from DB)
         self.monitor_tasks = {}  # Track monitoring tasks by order ID
         self.sell_strategy_manager = None  # Will be set after initialization
         self.order_callbacks = {}  # Callbacks to be executed after order is filled
+        
+        # Load active orders from database if available
+        if self.database_manager:
+            asyncio.create_task(self._load_orders_from_db())
+    
+    async def _load_orders_from_db(self):
+        """Load active orders from database on startup."""
+        try:
+            if not self.database_manager:
+                return
+                
+            logger.info("Loading active orders from database...")
+            # Note: We could implement loading pending orders here if needed
+            # For now, we'll just log that we're ready to save new orders
+            logger.info("OrderExecutor ready to save orders to database")
+            
+        except Exception as e:
+            logger.error(f"Failed to load orders from database: {e}")
+    
+    async def _save_order_to_db(self, order_data):
+        """Save order to database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            await self.database_manager.save_order(order_data)
+            logger.debug(f"Order {order_data.get('id', 'unknown')} saved to database")
+        except Exception as e:
+            logger.error(f"Failed to save order to database: {e}")
+    
+    async def _update_order_status_in_db(self, order_id: str, status: str, filled_quantity = None, avg_price = None):
+        """Update order status in database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            await self.database_manager.update_order_status(order_id, status, filled_quantity, avg_price)
+            logger.debug(f"Order {order_id} status updated to {status} in database")
+        except Exception as e:
+            logger.error(f"Failed to update order status in database: {e}")
+    
+    async def _save_trade_to_db(self, trade_data):
+        """Save completed trade to database."""
+        if not self.database_manager:
+            return
+            
+        try:
+            await self.database_manager.save_trade(trade_data)
+            logger.debug(f"Trade saved to database: {trade_data.get('symbol', 'unknown')} {trade_data.get('side', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Failed to save trade to database: {e}")
     
     async def execute_market_buy(self, symbol, usdt_amount):
         """
@@ -98,6 +155,21 @@ class OrderExecutor:
                     order_status = await self.mexc_api.get_order_status(symbol, order_id)
                     if order_status and 'executedQty' in order_status:
                         executed_qty = float(order_status['executedQty'])
+                
+                # Create order data for database
+                order_data = {
+                    'id': f"buy_{order_id}_{int(time.time())}",
+                    'symbol': symbol,
+                    'side': 'BUY',
+                    'type': 'MARKET',
+                    'quantity': executed_qty,
+                    'usdt_amount': usdt_amount,
+                    'status': 'NEW',
+                    'order_id': order_id
+                }
+                
+                # Save order to database
+                await self._save_order_to_db(order_data)
                 
                 # Track this order
                 self.active_orders[order_id] = {
